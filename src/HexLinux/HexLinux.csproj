@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- A plain console executable: on Linux the application is a user
+         daemon, started from a terminal, a desktop autostart entry or a
+         systemd user unit. The diagnostic modes write to the same console. -->
+    <OutputType>Exe</OutputType>
+
+    <!-- Lowercase, as Linux commands are. -->
+    <AssemblyName>hexlinux</AssemblyName>
+    <RootNamespace>HexLinux</RootNamespace>
+
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
+    <!-- No dependency on libicu. Nothing here formats for a culture: the log
+         and the console are invariant, and the transcript cleaner's regular
+         expressions carry their own Unicode tables. One shared library fewer
+         to be missing on a minimal distribution. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Required by LibraryImport, the modern interop generator. HexLinux
+         calls libc (ioctl, open, write) for uinput and libpulse-simple for
+         the microphone. The test project stays free of unsafe code. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- PreserveNewest rather than Always: a configuration edited next to the
+         executable during development must not be overwritten on every
+         build. -->
+    <None Update="settings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="org.k2fsa.sherpa.onnx" Version="1.13.8" />
+    <PackageReference Include="org.k2fsa.sherpa.onnx.runtime.linux-x64" Version="1.13.8" />
+  </ItemGroup>
+
+</Project>
