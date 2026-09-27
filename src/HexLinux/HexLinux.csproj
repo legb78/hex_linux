@@ -25,12 +25,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- PreserveNewest rather than Always: a configuration edited next to the
-         executable during development must not be overwritten on every
+    <!-- Copied next to the executable, so the release archive and the tests
+         find the commented file there. PreserveNewest rather than Always: a
+         copy edited during development must not be overwritten on every
          build. -->
     <None Update="settings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+
+    <!-- And built into the executable: the first start copies it into
+         ~/.config/hexlinux from there, so that a binary copied alone to
+         ~/.local/bin still gives the user the commented file. -->
+    <EmbeddedResource Include="settings.json" LogicalName="HexLinux.settings.json" />
   </ItemGroup>
 
   <ItemGroup>

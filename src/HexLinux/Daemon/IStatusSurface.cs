@@ -56,7 +56,12 @@ public interface IStatusSurface : IDisposable
     /// <summary>True when a tray host is actually showing the icon.</summary>
     bool IsVisible { get; }
 
-    /// <summary>Called on the daemon loop whenever the snapshot changes.</summary>
+    /// <summary>
+    /// Called on the daemon loop whenever the snapshot changes. Never blocks,
+    /// never throws: the loop is the one that handles the keyboard, so a
+    /// synchronous D-Bus call here would hold every dictation up. The daemon
+    /// still guards each call, but the surface must not rely on it.
+    /// </summary>
     void Update(StatusSnapshot snapshot);
 
     /// <summary>A desktop notification. Never throws, never blocks the loop.</summary>
