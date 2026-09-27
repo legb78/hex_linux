@@ -1,0 +1,244 @@
+name: Release
+
+# Continuous deployment: any merge into main publishes the version declared in
+# Directory.Build.props. If the matching tag already exists the workflow stops
+# without doing anything, so a merge that does not bump the number publishes
+# nothing and costs no more than reading a file.
+#
+# Releasing therefore comes down to bumping <Version> in a pull request.
+#
+# The work is split so that the token able to write never meets the project's
+# code. Building runs the tests, and with them every MSBuild target that every
+# NuGet package brings; a compromised package running next to a write token
+# could replace an asset or move a tag. So the job that builds holds a read-only
+# token, and the job that publishes — the only one that can write — checks out
+# nothing, runs nothing of the project, and hands the archive to the GitHub CLI
+# already on the runner. No third-party action ever holds the write token.
+#
+# Actions are referenced by major tag, as in the Windows sibling: Dependabot
+# keeps them current and the tag says what it is. The residual risk, a tag
+# moved by the publisher, is accepted for actions/* — published by GitHub,
+# which runs the runner itself — and is the reason no other publisher's action
+# appears here.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# The write-capable token is granted to the publishing job only.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Anything to publish?
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      publish: ${{ steps.decide.outputs.publish }}
+
+    steps:
+      # persist-credentials: false on every checkout. The token would otherwise
+      # stay on disk for the steps that follow, and none of them needs it.
+      - name: Check out the code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The value is validated on the spot. It comes from a file any pull
+      # request author can edit, and it ends up in a shell command below — a
+      # version of `1.0.1"; curl … | bash; #` would otherwise run as written.
+      # Refusing anything that is not three plain numbers closes that off at
+      # the source.
+      - name: Read the version
+        id: read
+        run: |
+          version=$(grep -oPm1 '(?<=<Version>)[^<]+' Directory.Build.props)
+
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Refusing a version that is not MAJOR.MINOR.PATCH: '$version'" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Declared version: $version"
+
+      # Passed through the environment and quoted, never interpolated straight
+      # into the script: ${{ }} is substituted textually before bash sees it,
+      # so anything inside it would be read as shell.
+      - name: Does the tag already exist?
+        id: decide
+        env:
+          VERSION: ${{ steps.read.outputs.version }}
+        run: |
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION is already published, nothing to do."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "v$VERSION is new, publishing."
+          fi
+
+  build:
+    name: Self-contained executable
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install the .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      # The one place re-running the tests earns its keep: it guards the
+      # artifact strangers will download. Nothing technically prevents a direct
+      # push to main from an account allowed to bypass the rules, so this step
+      # is the last net before publishing. A failure here means no release,
+      # which beats shipping a broken one.
+      - name: Unit tests
+        run: dotnet test -c Release --filter "Category!=Integration"
+
+      # Self-contained and single-file: the user installs no .NET runtime. The
+      # sherpa-onnx native libraries are embedded and extracted on first run.
+      - name: Publish
+        run: >
+          dotnet publish src/HexLinux/HexLinux.csproj
+          -c Release -r linux-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:DebugType=none
+          -o publish
+
+      # A tarball rather than a zip: tar keeps the executable bit, a zip
+      # extracted with the usual tools does not, and the first thing a user
+      # would meet is "Permission denied". The modes are set explicitly with
+      # install rather than trusted to the checkout, and the listing shows them
+      # in the log. A missing file fails the step: no release with a hole in it.
+      - name: Assemble the archive
+        run: |
+          root=package/hexlinux
+          mkdir -p "$root/packaging/udev" "$root/packaging/modules-load.d"
+
+          install -m 0755 publish/hexlinux "$root/"
+          install -m 0644 publish/settings.json "$root/"
+          install -m 0755 scripts/get-model.sh scripts/install-udev-rules.sh "$root/"
+          install -m 0644 packaging/udev/70-hexlinux.rules "$root/packaging/udev/"
+          install -m 0644 packaging/modules-load.d/hexlinux.conf "$root/packaging/modules-load.d/"
+          install -m 0644 README.md LICENSE NOTICE "$root/"
+
+          tar -czf hexlinux-linux-x64.tar.gz -C package hexlinux
+          tar -tvzf hexlinux-linux-x64.tar.gz
+
+          sha256sum hexlinux-linux-x64.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Hand the archive to the publishing job
+        uses: actions/upload-artifact@v7
+        with:
+          name: release
+          path: |
+            hexlinux-linux-x64.tar.gz
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish the release
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # The only job that can write. It checks out nothing and runs nothing of
+    # the project: it downloads what the build produced, checks it, publishes.
+    permissions:
+      contents: write
+
+    steps:
+      # The download itself fails on a digest mismatch (its default); the
+      # checksum below is the one users will check, verified before it ships.
+      - name: Fetch the archive
+        uses: actions/download-artifact@v8
+        with:
+          name: release
+
+      - name: Check the archive against its checksum
+        run: sha256sum -c SHA256SUMS
+
+      # The tag is created on the very commit that was built and tested
+      # (GITHUB_SHA), not on whatever main points at by then. The notes below
+      # are prepended to the ones GitHub generates from the merged pull
+      # requests. The token is given to this step alone.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## Install
+
+          1. Extract the archive, then open a terminal in the folder it creates:
+
+             ```sh
+             tar -xzf hexlinux-linux-x64.tar.gz
+             cd hexlinux
+             ```
+
+          2. Download the recognition model (about 490 MB, once). The script
+             checks its size and SHA-256 before extracting anything:
+
+             ```sh
+             ./get-model.sh
+             ```
+
+          3. Ask HexLinux what it can see of your session, then start it:
+
+             ```sh
+             ./hexlinux --doctor
+             ./hexlinux
+             ```
+
+          Dictating by **holding right `Ctrl`** needs read access to the
+          keyboards: `sudo ./install-udev-rules.sh`, then log out and back in.
+          That permission lets any program you run read everything you type; the
+          README explains the trade-off, and the way to dictate without any
+          permission: bind `hexlinux --toggle` to a shortcut of your desktop.
+
+          The clipboard and keystroke tools come from your distribution
+          (`wl-clipboard` or `xclip`, `xdotool` or `wtype`): `--doctor` names
+          the ones your session is missing. No .NET installation is required:
+          everything is bundled.
+
+          ## Check the download
+
+          ```sh
+          sha256sum -c SHA256SUMS
+          ```
+
+          GitHub also computes a digest of every asset, independently of the
+          files on this page:
+
+          ```sh
+          gh release view v@VERSION@ --repo @REPOSITORY@ --json assets --jq '.assets[] | .name + " " + .digest'
+          ```
+          EOF
+
+          # Both values are safe to write here: the version was checked to be
+          # three numbers, and a repository name is OWNER/NAME, with no "|".
+          sed -i "s|@VERSION@|$VERSION|; s|@REPOSITORY@|$GITHUB_REPOSITORY|" notes.md
+
+          gh release create "v$VERSION" hexlinux-linux-x64.tar.gz SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "HexLinux v$VERSION" \
+            --notes-file notes.md \
+            --generate-notes

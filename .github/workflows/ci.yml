@@ -1,0 +1,167 @@
+name: CI
+
+# Linux runners, and not only because they are the cheaper ones: Linux is the
+# platform HexLinux is built for, so this is where it has to build and pass.
+# The repository is public, so minutes are free today — but the settings below
+# cost nothing and keep runs quick, which matters more than the invoice:
+#   - paths-ignore  : no build when a documentation-only change lands on develop
+#                     (on pull requests it is off on purpose, see below)
+#   - concurrency   : a new push cancels the previous run of the same PR
+#   - timeout       : caps a run that would otherwise spin
+#   - NuGet cache   : avoids re-downloading packages every run
+
+on:
+  # No paths-ignore here, deliberately. The branch rules require both jobs
+  # below to report before a pull request can merge, and a workflow that never
+  # triggers never reports: a documentation-only pull request would wait for a
+  # verdict that could not arrive, and no one could merge it — not even with
+  # admin rights, since the rulesets grant no bypass. The Windows sibling of
+  # this project found that out the hard way, on a pull request touching
+  # SECURITY.md alone.
+  #
+  # `edited` joins the default activity types for the title check: renaming a
+  # pull request changes the title its squash will take, and without it the
+  # check would keep the verdict it gave the old title. It re-runs the build
+  # too, on any edit of the description — and that is accepted rather than
+  # skipped: a job skipped by a condition reports success, so a failing build
+  # followed by a description edit would turn the required check green on the
+  # very same commit.
+  #
+  # pull_request and not pull_request_target: the code of a pull request runs
+  # here with a read-only token and no secrets, which is all a build needs.
+  pull_request:
+    branches: [main, develop]
+    types: [opened, synchronize, reopened, edited]
+  # Pushes to main deliberately do NOT run here. A commit reaching main comes
+  # from develop and was already validated by its pull request, and the release
+  # workflow re-runs the tests before publishing.
+  push:
+    branches: [develop]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Reading the code is all either job does.
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build, tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # persist-credentials: false on every checkout. The token would otherwise
+      # stay on disk for the steps that follow — the build and the tests, that
+      # is, the code of the pull request — and none of them needs it.
+      - name: Check out the code
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install the .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Restore
+        run: dotnet restore
+
+      # Fails if a dependency carries a known vulnerability, transitive ones
+      # included. dotnet returns no error code in that case (checked with SDK
+      # 10.0.401: exit code 0 with a vulnerable package listed), so its output
+      # has to be inspected — otherwise this check would be decorative. For the
+      # same reason, a listing that fails to run fails the step instead of
+      # passing for a clean one. The report is searched through a here-string,
+      # not a pipe: with the runner's pipefail, grep -q quitting early can kill
+      # the writer, fail the pipeline, and let the vulnerability through.
+      - name: Vulnerable dependencies
+        run: |
+          if ! report=$(dotnet list package --vulnerable --include-transitive 2>&1); then
+            printf '%s\n' "$report"
+            echo "::error::The vulnerability listing could not run."
+            exit 1
+          fi
+          printf '%s\n' "$report"
+          if grep -q 'has the following vulnerable packages' <<< "$report"; then
+            echo "::error::A dependency carries a known vulnerability."
+            exit 1
+          fi
+          echo "No vulnerable dependency."
+
+      - name: Build
+        run: dotnet build -c Release --no-restore
+
+      # Formatting is checked after the build, not before: a syntax error would
+      # produce a far less useful message here than from the compiler.
+      - name: Formatting
+        run: dotnet format --verify-no-changes --no-restore
+
+      # The threshold covers the pure logic only. The shells are marked
+      # [ExcludeFromCodeCoverage], since they cannot be reached without a
+      # keyboard device, a microphone or a desktop session — none of which a
+      # runner has. Measuring them would make the number meaningless.
+      #
+      # Integration tests are excluded: the model is a 490 MB download and
+      # 670 MB on disk.
+      - name: Tests and coverage
+        run: >
+          dotnet test -c Release --no-build
+          --filter "Category!=Integration"
+          -p:CollectCoverage=true
+          -p:ExcludeByAttribute=ExcludeFromCodeCoverage
+          -p:Threshold=75
+          -p:ThresholdType=line
+          -p:ThresholdStat=total
+
+  # The commit convention, enforced rather than hoped for, on what a squash
+  # merge actually writes: the pull request title, and the subject of its
+  # commit when it has only one (the squash title is COMMIT_OR_PR_TITLE). The
+  # subjects of a pull request with several commits are reported without
+  # failing — a squash only lists them — and merge commits written by "Update
+  # branch" are left out. On a push to develop, every commit that landed is
+  # checked: that is where a squash title edited by hand in the merge dialog,
+  # or a rebase merge, would show. The job runs on both events instead of
+  # being skipped on pushes, for the reason given above: a skipped job would
+  # leave a success on the commit. The rules themselves are in the script.
+  conventional-commits:
+    name: Conventional commits
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # The whole history: the check walks from the base of the pull request
+      # (or the commit before the push) to its head.
+      - name: Check out the code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Passed through the environment and quoted by the script, never
+      # interpolated into it: ${{ }} is substituted textually before bash sees
+      # it, and a pull request title is text anyone can write — a title of
+      # `x"; curl … | bash; #` would otherwise run as written. The script never
+      # prints a title or a subject at the start of a line, and replaces their
+      # control characters: a line starting with "::" is a command to the
+      # runner.
+      - name: Title and commit subjects
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after }}
+        run: scripts/check-conventional-commits.sh
