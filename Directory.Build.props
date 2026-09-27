@@ -1,0 +1,37 @@
+<Project>
+
+  <!-- Product version. It is the ONLY source of truth: merging into main
+       publishes the version written here, and does nothing if the matching
+       tag already exists. Releasing therefore means bumping this number in a
+       pull request. -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <!-- Settings shared by every project of the solution. -->
+  <PropertyGroup>
+    <!-- .NET 10 rather than the 9 the Windows sibling started on: 9 is a
+         short-term release that leaves support on 2026-11-10, 10 is the
+         long-term one, supported until 2028-11-14. -->
+    <TargetFramework>net10.0</TargetFramework>
+
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- The slightest warning fails the build: that is what keeps the code
+         clean without anyone having to think about it, locally and in CI. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <!-- Linux only, declared rather than implied. The platform analyser then
+       accepts the Unix-only APIs used throughout (file modes, Unix sockets,
+       POSIX signals), and flags a Windows-only one should it ever slip in.
+       Declared on the tests as well, which call into this code. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.Versioning.SupportedOSPlatformAttribute">
+      <_Parameter1>linux</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

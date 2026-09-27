@@ -1,0 +1,20 @@
+# Everything is stored and checked out with LF, whatever the machine.
+#
+# The Windows sibling of this project keeps its C# files in CRLF, because its
+# .editorconfig asks for it and `dotnet format` checks it in CI. Here the rule
+# is the opposite, for the same reason: .editorconfig says LF, CI verifies it
+# on a Linux runner, and a clone made on Windows with core.autocrlf=true must
+# not hand the formatter CRLF files that would fail on the runner while looking
+# fine locally.
+* text=auto eol=lf
+
+# Shell scripts must stay LF even on a Windows checkout: a CR at the end of
+# the shebang line makes the kernel look for an interpreter called "bash\r".
+*.sh        text eol=lf
+
+# Binaries: no conversion.
+*.png       binary
+*.ico       binary
+*.bin       binary
+*.wav       binary
+*.onnx      binary

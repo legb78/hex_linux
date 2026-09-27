@@ -1,0 +1,39 @@
+## Build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+publish/
+package/
+*.tar.gz
+
+## IDE files
+*.user
+*.suo
+*.userosscache
+.vs/
+.idea/
+.vscode/
+
+## Tests
+TestResults/
+*.trx
+*.coverage
+
+## NuGet
+*.nupkg
+packages/
+
+## Recognition models — far past GitHub's 100 MB limit.
+## Downloaded with scripts/get-model.sh
+models/*
+!models/.gitkeep
+*.onnx
+
+## Miscellaneous
+*.log
+
+## Coverage reports
+coverage*.json
+coverage*.xml
+coverage*.info
