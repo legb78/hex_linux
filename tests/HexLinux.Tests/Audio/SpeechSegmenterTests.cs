@@ -153,4 +153,82 @@ public class SpeechSegmenterTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => new SpeechSegmenter(TimeSpan.FromSeconds(-1)));
     }
+
+    // --- The detector decides what is speech (HexWin's pull request #68) -----------
+
+    [Fact]
+    public void Loud_noise_the_detector_rejects_counts_as_a_pause()
+    {
+        // A voice detector hears a fan as silence, however loud it is: the
+        // pause is found where a level threshold would never see one.
+        var detector = new ScriptedDetector();
+        var segmenter = new SpeechSegmenter(Pause, detector);
+
+        Feed(segmenter, Repeat(Speech(), 4));
+        detector.Speaking = false;
+        byte[]? closed = Feed(segmenter, Repeat(Speech(), 10));
+
+        Assert.NotNull(closed);
+    }
+
+    [Fact]
+    public void Quiet_speech_the_detector_accepts_keeps_the_segment_open()
+    {
+        // A soft voice under the level threshold is still a voice.
+        var segmenter = new SpeechSegmenter(Pause, new ScriptedDetector());
+
+        byte[]? closed = Feed(segmenter, Repeat(Silence(), 20));
+
+        Assert.Null(closed);
+        Assert.Equal(20 * Chunk, segmenter.PendingBytes);
+    }
+
+    [Fact]
+    public void The_detector_is_not_asked_while_the_cutting_is_off()
+    {
+        // Segmentation off: no verdict is needed, so Silero is not even
+        // loaded by the daemon, and must not be required here.
+        var detector = new ScriptedDetector();
+        var segmenter = new SpeechSegmenter(TimeSpan.Zero, detector);
+
+        Feed(segmenter, Repeat(Speech(), 5));
+
+        Assert.Equal(0, detector.Calls);
+    }
+
+    [Fact]
+    public void A_missing_detector_is_refused()
+    {
+        Assert.Throws<ArgumentNullException>(() => new SpeechSegmenter(Pause, null!));
+    }
+
+    [Fact]
+    public void The_level_detector_is_the_silence_threshold()
+    {
+        // The fallback, when silero_vad.onnx is absent: exactly the rule the
+        // segmenter used before the detector existed.
+        var level = new LevelSpeechDetector();
+
+        Assert.True(level.IsSpeech(Speech()));
+        Assert.False(level.IsSpeech(Silence()));
+        level.Reset();
+        Assert.True(level.IsSpeech(Speech()));
+    }
+
+    private sealed class ScriptedDetector : ISpeechDetector
+    {
+        public bool Speaking { get; set; } = true;
+
+        public int Calls { get; private set; }
+
+        public bool IsSpeech(ReadOnlySpan<byte> pcm)
+        {
+            Calls++;
+            return Speaking;
+        }
+
+        public void Reset()
+        {
+        }
+    }
 }

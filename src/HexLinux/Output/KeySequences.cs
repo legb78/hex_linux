@@ -45,4 +45,26 @@ public static class KeySequences
 
         return groups;
     }
+
+    /// <summary>
+    /// <paramref name="characters"/> Backspaces, for a spoken "efface ça":
+    /// each press and each release in a report of its own, like the paste
+    /// keys. Backspace is layout-independent, so the virtual keyboard can send
+    /// it, unlike text. The caller makes sure no modifier is held: with Ctrl,
+    /// each one would erase a word.
+    /// </summary>
+    public static IReadOnlyList<InputEvent[]> Erase(int characters)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(characters);
+
+        List<InputEvent[]> groups = new(characters * 2);
+
+        for (int i = 0; i < characters; i++)
+        {
+            groups.Add([InputEvent.KeyEvent(LinuxKeys.Backspace, pressed: true), InputEvent.Report()]);
+            groups.Add([InputEvent.KeyEvent(LinuxKeys.Backspace, pressed: false), InputEvent.Report()]);
+        }
+
+        return groups;
+    }
 }

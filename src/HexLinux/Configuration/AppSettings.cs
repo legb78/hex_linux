@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using HexLinux.Input;
 
 namespace HexLinux.Configuration;
 
@@ -144,9 +145,8 @@ public sealed class AppSettings
     public string Provider { get; set; } = DefaultProvider;
 
     /// <summary>
-    /// Threads allotted to decoding. Past a handful the gain collapses: the
-    /// model is small and synchronisation costs more than the parallelism
-    /// brings.
+    /// Threads allotted to decoding. Zero, the default, picks one per
+    /// physical core, up to 8; see <see cref="Transcription.DecodingThreads"/>.
     /// </summary>
     public int Threads { get; set; } = DefaultThreads;
 
@@ -157,10 +157,11 @@ public sealed class AppSettings
     public int UnloadAfterMinutes { get; set; } = DefaultUnloadAfterMinutes;
 
     /// <summary>
-    /// Puts the space French typography wants before ? ! ; : and ». On by
-    /// default, as in HexWin; off leaves the punctuation as the engine wrote
-    /// it, which is what English expects. A setting rather than a rule because
-    /// the engine does not reliably report which language it recognised.
+    /// Puts the space French typography wants before ? ! ; : and », in text
+    /// that reads as French — the engine does not say which language it
+    /// heard, so the text is judged by its words (see
+    /// <see cref="Transcription.TranscriptCleaner"/>). On by default, as in
+    /// HexWin; off never adds it, whatever the language.
     /// </summary>
     public bool FrenchSpacing { get; set; } = true;
 
@@ -191,7 +192,7 @@ public sealed class AppSettings
 
     private const string DefaultModelPath = "models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8";
     private const string DefaultProvider = "cpu";
-    private const int DefaultThreads = 4;
+    private const int DefaultThreads = 0;
     private const int DefaultUnloadAfterMinutes = 5;
 
     /// <summary>
@@ -230,33 +231,6 @@ public sealed class AppSettings
     /// that cannot happen.
     /// </summary>
     private static readonly string[] KnownProviders = ["cpu"];
-
-    /// <summary>
-    /// Keys allowed in a shortcut: modifiers, and function keys no ordinary
-    /// keyboard carries. Fn is absent because it is handled by the keyboard's
-    /// own controller and emits no code the kernel can see.
-    ///
-    /// <para><b>Space and Caps Lock, accepted by HexWin, are refused
-    /// here.</b> Windows withholds the keys of the shortcut from the
-    /// application; Linux cannot (see <c>ChordDetector</c>). Held as a
-    /// shortcut, Space would type a space and then repeat it for the whole
-    /// dictation, and Caps Lock would toggle capitals every time.</para>
-    /// </summary>
-    private static readonly string[] KnownHotkeyNames =
-    [
-        "Ctrl", "LeftCtrl", "RightCtrl",
-        "Alt", "LeftAlt", "RightAlt",
-        "Shift", "LeftShift", "RightShift",
-        "Super", "LeftSuper", "RightSuper",
-        "F13", "F14", "F15", "F16", "F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24",
-    ];
-
-    /// <summary>Names HexWin accepts and HexLinux refuses on purpose, with the reason given back.</summary>
-    private static readonly Dictionary<string, string> RefusedHotkeyNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["Space"] = "it would type spaces while held: HexLinux cannot withhold keys from the desktop",
-        ["CapsLock"] = "it would toggle capitals at every press: HexLinux cannot withhold keys from the desktop",
-    };
 
     /// <summary>
     /// The Windows names of the Super keys, accepted so that a settings.json
@@ -687,7 +661,9 @@ public sealed class AppSettings
 
         // Zero stays allowed: that is how the cutting is turned off.
         PauseMilliseconds = Clamp("pauseMilliseconds", PauseMilliseconds, 0, MaxPauseMilliseconds, notes);
-        Threads = Clamp("threads", Threads, 1, MaxThreads, notes);
+
+        // Zero stays allowed: that is how the count is left to the machine.
+        Threads = Clamp("threads", Threads, 0, MaxThreads, notes);
 
         // Zero stays allowed: that is how the model is kept resident.
         UnloadAfterMinutes = Clamp("unloadAfterMinutes", UnloadAfterMinutes, 0, MaxUnloadAfterMinutes, notes);
@@ -761,7 +737,7 @@ public sealed class AppSettings
         if (rejected >= 0)
         {
             string name = hotkey[rejected]?.Trim() ?? "null";
-            string reason = RefusedHotkeyNames.TryGetValue(name, out string? why) ? why : "not a key a shortcut can use";
+            string reason = RefusedKeys.Reason(name) ?? "not a key a shortcut can use";
 
             notes?.Add($"\"hotkey\": \"{name}\" is refused ({reason}): the default shortcut is used");
             return [.. DefaultHotkey];
@@ -770,6 +746,13 @@ public sealed class AppSettings
         return [.. canonical.OfType<string>().Distinct(StringComparer.Ordinal)];
     }
 
+    /// <summary>
+    /// The keys a shortcut may use are <see cref="LinuxKeys"/>' names: the
+    /// modifiers, F1 to F24 and Pause. Fn is absent because it is handled by
+    /// the keyboard's own controller and emits no code the kernel can see;
+    /// the keys HexWin accepts beyond these are refused with their reason
+    /// (<see cref="RefusedKeys"/>).
+    /// </summary>
     private static string? CanonicalHotkeyName(string? name)
     {
         string? trimmed = name?.Trim();
@@ -779,7 +762,6 @@ public sealed class AppSettings
             trimmed = alias;
         }
 
-        return KnownHotkeyNames.FirstOrDefault(
-            known => string.Equals(known, trimmed, StringComparison.OrdinalIgnoreCase));
+        return LinuxKeys.Canonical(trimmed);
     }
 }

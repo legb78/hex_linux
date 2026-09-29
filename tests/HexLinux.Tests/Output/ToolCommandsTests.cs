@@ -44,6 +44,7 @@ public class ToolCommandsTests
         foreach (KeyStroker keys in new[] { KeyStroker.Xdotool, KeyStroker.Wtype })
         {
             yield return ToolCommands.TypeText(keys);
+            yield return ToolCommands.EraseKeys(keys, 3);
 
             foreach (PasteShortcut shortcut in Enum.GetValues<PasteShortcut>())
             {
@@ -296,6 +297,35 @@ public class ToolCommandsTests
         // The uinput keyboard takes key codes (KeySequences), and cannot type.
         Assert.Throws<ArgumentOutOfRangeException>(() => ToolCommands.PasteKeys(keys, PasteShortcut.CtrlV));
         Assert.Throws<ArgumentOutOfRangeException>(() => ToolCommands.TypeText(keys));
+        Assert.Throws<ArgumentOutOfRangeException>(() => ToolCommands.EraseKeys(keys, 1));
+    }
+
+    // --- Spoken erase ---------------------------------------------------------------
+
+    [Fact]
+    public void Xdotool_erases_with_repeated_backspaces_and_the_held_modifiers_cleared()
+    {
+        // "xdotool key --repeat TIMES" (xdotool 3.20160805 --help). Without
+        // --clearmodifiers, a Ctrl still held would make each one erase a
+        // word — text the dictation never typed.
+        AssertCommand(ToolCommands.EraseKeys(KeyStroker.Xdotool, 16), ToolLocator.Xdotool, "key", "--clearmodifiers", "--repeat", "16", "BackSpace");
+    }
+
+    [Fact]
+    public void Wtype_erases_with_one_tap_per_character()
+    {
+        // wtype 0.4 has no repeat option: -k presses and releases one key.
+        AssertCommand(ToolCommands.EraseKeys(KeyStroker.Wtype, 3), ToolLocator.Wtype, "-k", "BackSpace", "-k", "BackSpace", "-k", "BackSpace");
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Erasing_nothing_is_not_a_command(int characters)
+    {
+        // A command that erases nothing has no reason to run: the injector
+        // stops before it, and a count it did not mean is refused here.
+        Assert.Throws<ArgumentOutOfRangeException>(() => ToolCommands.EraseKeys(KeyStroker.Xdotool, characters));
     }
 
     // --- Session ------------------------------------------------------------------

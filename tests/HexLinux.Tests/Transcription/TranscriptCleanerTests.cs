@@ -217,17 +217,45 @@ public class TranscriptCleanerTests
     [InlineData("Tu viens vendredi?")]
     public void With_french_spacing_off_the_punctuation_stays_as_the_engine_wrote_it(string dictated)
     {
-        // The reason it is a switch: someone dictating in English must get
-        // "Are you ready?", not "Are you ready ?".
+        // Off means never, French text included: for whoever wants the
+        // engine's punctuation untouched.
         Assert.Equal(dictated, TranscriptCleaner.Clean(dictated, frenchSpacing: false));
     }
 
-    [Fact]
-    public void With_french_spacing_on_English_gets_the_French_space_too()
+    [Theory]
+    [InlineData("Are you ready?")]
+    [InlineData("Are you coming on Friday?")]
+    [InlineData("What a mess!")]
+    [InlineData("Here is the list: eggs, milk.")]
+    [InlineData("Really?")]
+    public void With_french_spacing_on_an_english_dictation_keeps_its_own_typography(string dictated)
     {
-        // The trade-off the switch exists for: the engine does not reliably
-        // say which language it heard, so the rule applies to every one.
-        Assert.Equal("Are you ready ?", TranscriptCleaner.Clean("Are you ready?", frenchSpacing: true));
+        // The engine is multilingual: "Friday ?" would be a typo in English.
+        // Before HexWin's pull request #68 the rule applied to every language,
+        // and the only way out was turning the switch off.
+        Assert.Equal(dictated, TranscriptCleaner.Clean(dictated, frenchSpacing: true));
+    }
+
+    [Theory]
+    [InlineData("Vendredi?", "Vendredi ?")]
+    [InlineData("Déjà?", "Déjà ?")]
+    [InlineData("OK?", "OK ?")]
+    public void A_sentence_with_no_clue_to_its_language_is_treated_as_french(string raw, string expected)
+    {
+        // A tie counts as French: it is what the spacing always assumed.
+        Assert.Equal(expected, TranscriptCleaner.Clean(raw));
+    }
+
+    [Theory]
+    [InlineData("Tu viens avec you?", "Tu viens avec you ?")]
+    [InlineData("I think que c'est bien!", "I think que c'est bien !")]
+    [InlineData("Is it the café?", "Is it the café?")]
+    public void A_mixed_sentence_goes_with_the_language_that_has_more_clues(string raw, string expected)
+    {
+        // "tu", "avec" against "you"; "que" against "i"; "is", "it", "the"
+        // against one accent: people slip words of the other language in, and
+        // the majority decides.
+        Assert.Equal(expected, TranscriptCleaner.Clean(raw));
     }
 
     [Fact]
@@ -242,12 +270,13 @@ public class TranscriptCleanerTests
     [Fact]
     public void The_switch_also_applies_to_the_segments()
     {
-        // Sentence-by-sentence insertion goes through the segment overload:
-        // turning the spacing off must hold there too.
-        string[] segments = ["Are you", "ready?"];
+        // The segment overload joins first and judges the language on the
+        // whole: turning the spacing off must hold there too.
+        string[] segments = ["Tu es", "prêt?"];
 
-        Assert.Equal("Are you ready?", TranscriptCleaner.Clean(segments, frenchSpacing: false));
-        Assert.Equal("Are you ready ?", TranscriptCleaner.Clean(segments, frenchSpacing: true));
+        Assert.Equal("Tu es prêt?", TranscriptCleaner.Clean(segments, frenchSpacing: false));
+        Assert.Equal("Tu es prêt ?", TranscriptCleaner.Clean(segments, frenchSpacing: true));
+        Assert.Equal("Are you ready?", TranscriptCleaner.Clean(["Are you", "ready?"], frenchSpacing: true));
     }
 
     [Fact]

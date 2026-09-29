@@ -111,9 +111,11 @@ public class UinputAbiTests
         // a terminal it would run whatever the dictation left on the line.
         const int enter = 28;
         IEnumerable<int> used = Enum.GetValues<PasteShortcut>().SelectMany(shortcut => KeySequences.KeysOf(shortcut));
+        IEnumerable<int> erased = KeySequences.Erase(3).Select(group => (int)group[0].Code);
 
         Assert.Contains(enter, UinputAbi.DeclaredKeys);
         Assert.DoesNotContain(enter, used);
+        Assert.DoesNotContain(enter, erased);
     }
 
     // --- struct uinput_setup ------------------------------------------------------

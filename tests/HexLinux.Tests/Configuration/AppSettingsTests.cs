@@ -50,7 +50,7 @@ public class AppSettingsTests : IDisposable
         Assert.False(settings.Segmentation);
         Assert.Equal(700, settings.PauseMilliseconds);
         Assert.Equal("cpu", settings.Provider);
-        Assert.Equal(4, settings.Threads);
+        Assert.Equal(0, settings.Threads);
         Assert.Equal(5, settings.UnloadAfterMinutes);
         Assert.True(settings.FrenchSpacing);
         Assert.Equal(InsertionMode.Paste, settings.Insertion);
@@ -135,7 +135,7 @@ public class AppSettingsTests : IDisposable
 
         Assert.Equal(FeedbackMode.Sound, settings.Feedback);
         Assert.Equal(["RightAlt"], settings.Hotkey);
-        Assert.Equal(4, settings.Threads);
+        Assert.Equal(0, settings.Threads);
         Assert.Equal(InsertionMode.Type, settings.Insertion);
         Assert.Equal(900, settings.PauseMilliseconds);
     }
@@ -346,7 +346,7 @@ public class AppSettingsTests : IDisposable
             out IReadOnlyList<string> notes);
 
         Assert.Contains(notes, note => note.Contains("\"feedback\"", StringComparison.Ordinal));
-        Assert.Contains(notes, note => note.Contains("\"threads\": 1000 is outside 1 to 32: 32 used", StringComparison.Ordinal));
+        Assert.Contains(notes, note => note.Contains("\"threads\": 1000 is outside 0 to 32: 32 used", StringComparison.Ordinal));
         Assert.Contains(notes, note => note.Contains("\"Space\" is refused", StringComparison.Ordinal));
         Assert.Contains(notes, note => note.Contains("\"bogus\" is not a HexLinux setting", StringComparison.Ordinal));
     }
@@ -441,17 +441,26 @@ public class AppSettingsTests : IDisposable
     // --- Threads --------------------------------------------------------------
 
     [Theory]
-    [InlineData(-4, 1)]
-    [InlineData(0, 1)]
+    [InlineData(-4, 0)]
+    [InlineData(0, 0)]
     [InlineData(4, 4)]
     [InlineData(1_000, 32)]
     public void The_thread_count_is_brought_back_within_bounds(int written, int expected)
     {
-        // Zero threads would stall decoding; a thousand would saturate the
-        // machine while speeding nothing up, the model being small.
+        // Below zero means nothing, zero leaving the count to the machine (one
+        // per physical core); a thousand would saturate it while speeding
+        // nothing up, the model being small.
         AppSettings settings = AppSettings.Parse($$"""{"threads": {{written}}}""");
 
         Assert.Equal(expected, settings.Threads);
+    }
+
+    [Fact]
+    public void The_thread_count_is_automatic_by_default()
+    {
+        // HexWin's pull request #68: a fixed four was too many on a dual-core
+        // laptop and too few on a large desktop.
+        Assert.Equal(0, new AppSettings().Threads);
     }
 
     // --- Shortcut -------------------------------------------------------------
@@ -508,6 +517,46 @@ public class AppSettingsTests : IDisposable
         Assert.Contains("HexLinux cannot withhold keys from the desktop", note, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("f5", "F5")]
+    [InlineData("PAUSE", "Pause")]
+    [InlineData(" f12 ", "F12")]
+    public void A_newly_accepted_key_is_written_in_its_usual_form(string written, string expected)
+    {
+        // What --watch-hotkey prints is the form every other message uses.
+        AppSettings settings = AppSettings.Parse($$"""{"hotkey": ["{{written}}"]}""");
+
+        Assert.Equal([expected], settings.Hotkey);
+    }
+
+    [Theory]
+    [InlineData("A", "it would type or delete text while held")]
+    [InlineData("7", "it would type or delete text while held")]
+    [InlineData("Numpad5", "it would type or delete text while held")]
+    [InlineData("Oem1", "it would type or delete text while held")]
+    [InlineData("Enter", "it would type or delete text while held")]
+    [InlineData("Backspace", "it would type or delete text while held")]
+    [InlineData("Up", "it would move the cursor at every press and repeat")]
+    [InlineData("PageDown", "it would move the cursor at every press and repeat")]
+    [InlineData("Insert", "it would toggle overwrite mode in editors at every press")]
+    [InlineData("NumLock", "it would toggle the numeric keypad at every press")]
+    [InlineData("ScrollLock", "it would toggle Scroll Lock at every press")]
+    [InlineData("Escape", "the focused application would close or cancel something at every press")]
+    [InlineData("MediaPlayPause", "the desktop acts on it itself at every press")]
+    [InlineData("VolumeUp", "the desktop acts on it itself at every press")]
+    [InlineData("PrintScreen", "the desktop takes a screenshot at every press")]
+    [InlineData("VK_E8", "a Windows virtual-key code")]
+    public void A_key_HexWin_accepts_since_pull_request_68_is_refused_with_its_reason(string key, string reason)
+    {
+        // HexWin takes any key because Windows withholds the shortcut's keys;
+        // Linux does not, so a settings.json carried over must say why its
+        // shortcut fell back to Right Ctrl rather than just do it.
+        AppSettings settings = AppSettings.Parse($$"""{"hotkey": ["{{key}}"]}""", out IReadOnlyList<string> notes);
+
+        Assert.Equal(["RightCtrl"], settings.Hotkey);
+        Assert.StartsWith($"\"hotkey\": \"{key}\" is refused ({reason}", Assert.Single(notes), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void A_refused_key_combined_with_a_valid_one_still_costs_the_whole_shortcut()
     {
@@ -530,6 +579,18 @@ public class AppSettingsTests : IDisposable
     [InlineData("Super")]
     [InlineData("LeftSuper")]
     [InlineData("RightSuper")]
+    [InlineData("F1")]
+    [InlineData("F2")]
+    [InlineData("F3")]
+    [InlineData("F4")]
+    [InlineData("F5")]
+    [InlineData("F6")]
+    [InlineData("F7")]
+    [InlineData("F8")]
+    [InlineData("F9")]
+    [InlineData("F10")]
+    [InlineData("F11")]
+    [InlineData("F12")]
     [InlineData("F13")]
     [InlineData("F14")]
     [InlineData("F15")]
@@ -542,6 +603,7 @@ public class AppSettingsTests : IDisposable
     [InlineData("F22")]
     [InlineData("F23")]
     [InlineData("F24")]
+    [InlineData("Pause")]
     public void Every_key_name_settings_json_documents_is_accepted(string key)
     {
         // The list in the comments of settings.json is a promise: a name it
@@ -693,7 +755,7 @@ public class AppSettingsTests : IDisposable
     [InlineData("minRecordingMilliseconds", -100, "\"minRecordingMilliseconds\": -100 is outside 0 to 5000: 0 used")]
     [InlineData("maxRecordingSeconds", 1, "\"maxRecordingSeconds\": 1 is outside 5 to 600: 5 used")]
     [InlineData("pauseMilliseconds", 60_000, "\"pauseMilliseconds\": 60000 is outside 0 to 5000: 5000 used")]
-    [InlineData("threads", 0, "\"threads\": 0 is outside 1 to 32: 1 used")]
+    [InlineData("threads", -1, "\"threads\": -1 is outside 0 to 32: 0 used")]
     [InlineData("unloadAfterMinutes", 100_000, "\"unloadAfterMinutes\": 100000 is outside 0 to 1440: 1440 used")]
     public void A_number_out_of_range_is_reported_with_the_bound_used(string key, int written, string expected)
     {
@@ -999,7 +1061,7 @@ public class AppSettingsTests : IDisposable
             ModelPath = " ",
             Provider = "cuda",
             Hotkey = ["Space"],
-            Threads = 0,
+            Threads = -2,
             MaxRecordingSeconds = 100_000,
             Insertion = (InsertionMode)9,
             PasteShortcut = (PasteShortcut)9,
@@ -1012,7 +1074,7 @@ public class AppSettingsTests : IDisposable
         Assert.Equal(DefaultModel, settings.ModelPath);
         Assert.Equal("cpu", settings.Provider);
         Assert.Equal(["RightCtrl"], settings.Hotkey);
-        Assert.Equal(1, settings.Threads);
+        Assert.Equal(0, settings.Threads);
         Assert.Equal(600, settings.MaxRecordingSeconds);
         Assert.Equal(InsertionMode.Paste, settings.Insertion);
         Assert.Equal(PasteShortcut.CtrlV, settings.PasteShortcut);
