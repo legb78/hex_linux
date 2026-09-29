@@ -15,7 +15,11 @@ namespace HexLinux.Transcription;
 ///
 /// The typographic spacing, by contrast, concerns Parakeet directly, which
 /// writes "vendredi?" the English way where French usage expects
-/// "vendredi ?".
+/// "vendredi ?". It is a switch (<c>frenchSpacing</c> in settings.json)
+/// rather than a rule, because it would otherwise apply to every language:
+/// "Are you ready?" became "Are you ready ?". The engine does not reliably say
+/// which language it recognised, so the choice is left to the user; on by
+/// default, as HexWin always did.
 ///
 /// A deliberately pure class: no dependency, entirely testable.
 /// </summary>
@@ -26,17 +30,22 @@ public static partial class TranscriptCleaner
     /// string if nothing meaningful is left — the caller must then insert
     /// nothing at all.
     /// </summary>
-    public static string Clean(IEnumerable<string?>? segments)
+    public static string Clean(IEnumerable<string?>? segments, bool frenchSpacing = true)
     {
         if (segments is null)
         {
             return string.Empty;
         }
 
-        return Clean(string.Join(' ', segments.Where(s => !string.IsNullOrEmpty(s))));
+        return Clean(string.Join(' ', segments.Where(s => !string.IsNullOrEmpty(s))), frenchSpacing);
     }
 
-    public static string Clean(string? text)
+    /// <param name="text">What the engine produced.</param>
+    /// <param name="frenchSpacing">
+    /// Puts the space French typography wants before <c>? ! ; : »</c>. Off,
+    /// the punctuation is left as the engine wrote it.
+    /// </param>
+    public static string Clean(string? text, bool frenchSpacing = true)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -48,7 +57,11 @@ public static partial class TranscriptCleaner
         cleaned = MusicalNotes().Replace(cleaned, " ");
         cleaned = HallucinatedCredits().Replace(cleaned, " ");
         cleaned = Whitespace().Replace(cleaned, " ").Trim();
-        cleaned = FrenchPunctuationSpacing().Replace(cleaned, " $1");
+
+        if (frenchSpacing)
+        {
+            cleaned = FrenchPunctuationSpacing().Replace(cleaned, " $1");
+        }
 
         // Once the annotations are gone, nothing may remain but orphaned
         // punctuation. Inserting a lone "." would be worse than inserting
@@ -95,19 +108,25 @@ public static partial class TranscriptCleaner
     /// silently stop the cleaning from matching anything.
     /// </summary>
     /// <remarks>
-    /// The tail pattern <c>(?:[^.!?\n]|\.(?=\p{Ll}))*</c> runs to the end of
-    /// the sentence but steps over a full stop followed by a lowercase letter:
-    /// otherwise "Amara.org" would cut the match in half and leave an orphaned
-    /// "org" in the inserted text.
+    /// <para>The tail pattern <c>(?:[^.!?\n]|\.(?=\p{Ll}))*</c> runs to the end
+    /// of the sentence but steps over a full stop followed by a lowercase
+    /// letter: otherwise "Amara.org" would cut the match in half and leave an
+    /// orphaned "org" in the inserted text.</para>
+    ///
+    /// <para>The three closing lines with no attribution marker — "Merci
+    /// d'avoir regardé cette vidéo", "Abonnez-vous", "Thanks for watching" —
+    /// only go when they make up a sentence of their own: at the start of the
+    /// text or after a full stop, and followed by the end of the sentence or
+    /// of the text. Matched anywhere, they cut real dictations short: "Thanks
+    /// for watching the kids yesterday." came out as "the kids yesterday."
+    /// (QA-12, a behaviour inherited from HexWin).</para>
     /// </remarks>
     [GeneratedRegex(
         @"(?:Sous-titr(?:es|age)\s+(?:r[ée]alis[ée]s?\s+par|par|Soci[ée]t[ée]|ST['’]|MFP\b)"
         + @"(?:[^.!?\n]|\.(?=\p{Ll}))*[.!?]?)"
         + @"|(?:SousTitreur\.com)"
         + @"|(?:Amara\.org)"
-        + @"|(?:Merci d'avoir regard[ée] cette vid[ée]o\s*!?)"
-        + @"|(?:Abonnez-vous\s*!?)"
-        + @"|(?:Thanks for watching\s*!?)"
+        + @"|(?:(?<=^\s*|[.!?]\s+)(?:Merci d'avoir regard[ée] cette vid[ée]o|Abonnez-vous|Thanks for watching)(?:\s*[.!?]+|\s*$))"
         + @"|(?:Subtitles by(?:[^.!?\n]|\.(?=\p{Ll}))*[.!?]?)",
         RegexOptions.IgnoreCase)]
     private static partial Regex HallucinatedCredits();

@@ -16,6 +16,22 @@ namespace HexLinux.Output;
 /// </summary>
 public static class ClipboardFormats
 {
+    /// <summary>
+    /// Past this size the clipboard is not saved, and so not restored: it is
+    /// cleared after the paste instead. A copied image or file list stays far
+    /// below it; what exceeds it is an application's own format for something
+    /// huge, and holding it in memory for every dictation would cost more than
+    /// losing it — which the log then says.
+    /// </summary>
+    public const int MaxSnapshotBytes = 32 * 1024 * 1024;
+
+    /// <summary>
+    /// The format by which a password manager marks a copy as a secret
+    /// (KeePassXC offers it with the value <c>secret</c>): clipboard
+    /// histories — Klipper, CopyQ — then leave the copy out.
+    /// </summary>
+    public const string PasswordManagerHint = "x-kde-passwordManagerHint";
+
     private static readonly string[] Preference =
     [
         "text/plain;charset=utf-8",
@@ -66,6 +82,24 @@ public static class ClipboardFormats
         // Anything else that names a MIME type: an application's own format
         // is still better restored than lost.
         return Array.Find(formats, format => format.Contains('/', StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Whether the clipboard holds a secret a password manager marked as such.
+    ///
+    /// <para>Such content is not saved, and so not restored: it is cleared
+    /// after the paste instead. The tools put back one format only, so the
+    /// secret would return <i>without</i> its mark, and the clipboard history
+    /// that had rightly left it out would then record the password (verified:
+    /// after a paste, the targets offered went from UTF8_STRING and
+    /// x-kde-passwordManagerHint to UTF8_STRING alone). Losing a copied
+    /// password is the lesser harm: the password manager has it.</para>
+    /// </summary>
+    public static bool IsMarkedSecret(IEnumerable<string> offered)
+    {
+        ArgumentNullException.ThrowIfNull(offered);
+
+        return offered.Any(format => string.Equals(format.Trim(), PasswordManagerHint, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

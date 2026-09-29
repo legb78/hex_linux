@@ -1,0 +1,17 @@
+# HexLinux — the virtual keyboard device, for the user of the active local
+# session. OPTIONAL: installed only by `install-udev-rules.sh --with-uinput`,
+# as /etc/udev/rules.d/70-hexlinux-uinput.rules.
+#
+# Why: under GNOME and KDE on Wayland, no ordinary program may send a key to
+# another, and the paste shortcut can only be delivered by a virtual keyboard
+# created through /dev/uinput, below the desktop. X11 sessions and wlroots
+# compositors (Sway, Hyprland…) do not need it: xdotool or wtype send the keys.
+#
+# /dev/uinput exists before any rule runs (static_node), hence the option that
+# hands it to logind's ACL management like a hot-plugged device. Same number
+# below 73 as the keyboard rule, for the same reason.
+#
+# What it grants, said plainly: every program of that user can create virtual
+# keyboards and mice, and type anywhere — the lock screen, a root terminal and
+# a sudo prompt included. Install it only if you need it.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"

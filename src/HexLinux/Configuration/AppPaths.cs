@@ -18,11 +18,16 @@ namespace HexLinux.Configuration;
 /// <param name="DataDirectory">The downloaded model lives here.</param>
 /// <param name="StateDirectory">The log lives here.</param>
 /// <param name="RuntimeDirectory">The control socket lives here.</param>
+/// <param name="AutostartDirectory">
+/// The desktop's autostart folder, <c>~/.config/autostart</c>: shared with
+/// every other application, so not inside <paramref name="ConfigDirectory"/>.
+/// </param>
 public sealed record AppPaths(
     string ConfigDirectory,
     string DataDirectory,
     string StateDirectory,
-    string RuntimeDirectory)
+    string RuntimeDirectory,
+    string AutostartDirectory)
 {
     public const string ApplicationFolder = "hexlinux";
 
@@ -33,6 +38,16 @@ public sealed record AppPaths(
     public string CrashFile => Path.Combine(StateDirectory, "crash.log");
 
     public string ControlSocket => Path.Combine(RuntimeDirectory, "control.sock");
+
+    /// <summary>
+    /// Held locked for as long as a daemon runs: the one reliable answer to
+    /// "is another one running?", where a socket file left behind by a crash
+    /// would lie.
+    /// </summary>
+    public string LockFile => Path.Combine(RuntimeDirectory, "daemon.lock");
+
+    /// <summary>The entry that starts HexLinux with the session.</summary>
+    public string AutostartFile => Path.Combine(AutostartDirectory, Daemon.DesktopEntry.FileName);
 
     /// <summary>
     /// Resolves the four folders.
@@ -63,7 +78,8 @@ public sealed record AppPaths(
             Path.Combine(config, ApplicationFolder),
             Path.Combine(data, ApplicationFolder),
             stateDirectory,
-            runtime is null ? stateDirectory : Path.Combine(runtime, ApplicationFolder));
+            runtime is null ? stateDirectory : Path.Combine(runtime, ApplicationFolder),
+            Path.Combine(config, "autostart"));
     }
 
     /// <summary>Variant wired to the real environment of the process.</summary>
