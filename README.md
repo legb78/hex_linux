@@ -68,7 +68,10 @@ need those.
 `get-model.sh` puts the model in `~/.local/share/hexlinux/models`, and checks
 the size and SHA-256 of the archive against values pinned in the script
 before extracting anything. If the model's publisher ever replaces the file,
-the script refuses it until it is updated.
+the script refuses it until it is updated. It fetches the speech detector that
+finds the pauses, `silero_vad.onnx`, under the same checks; HexLinux checks
+that file again before loading it, since a damaged one would crash the native
+library.
 
 To start HexLinux with your session:
 
@@ -216,7 +219,14 @@ pressed while the shortcut is held — keeps the pieces already inserted. Once
 the shortcut is released, its keys go back to their ordinary uses: a Right
 `Ctrl`+`C` typed while the dictation is transcribed copies, and cancels
 nothing. The shortcut never ends or cancels a dictation started from
-`--toggle` or the tray either; `hexlinux --cancel` does, at any point.
+`--toggle` or the tray either; `hexlinux --cancel` does, at any point. A
+sentence cut in two by a pause is stitched back, without a stray full stop.
+
+Hesitations — *euh*, *hum*, *uh*, *um* — are dropped. Saying *efface ça*,
+*supprime la dernière phrase*, *scratch that* or *delete the last sentence* on
+its own erases the sentence before it; with `segmentation` on, a sentence
+already inserted is erased with Backspace, once no `Ctrl`, `Alt`, `Shift` or
+`Super` key is held. Only text the same dictation inserted is ever erased.
 
 ## Settings
 
@@ -229,20 +239,20 @@ settings of the file are kept — rather than preventing startup.
 
 | Setting | What it does |
 |---------|--------------|
-| `hotkey` | Keys to hold. Default `["RightCtrl"]`. Names: `Ctrl`, `LeftCtrl`, `RightCtrl`, `Alt`, `LeftAlt`, `RightAlt`, `Shift`, `LeftShift`, `RightShift`, `Super`, `LeftSuper`, `RightSuper` (HexWin's `Win` names are accepted), `F13` to `F24`. `Space` and `CapsLock` are refused, because the keys are not withheld from the desktop; `Fn` emits nothing Linux can see. `--watch-hotkey` names the keys you press. |
+| `hotkey` | Keys to hold. Default `["RightCtrl"]`. Names: `Ctrl`, `LeftCtrl`, `RightCtrl`, `Alt`, `LeftAlt`, `RightAlt`, `Shift`, `LeftShift`, `RightShift`, `Super`, `LeftSuper`, `RightSuper` (HexWin's `Win` names are accepted), `F1` to `F24`, `Pause`. HexWin accepts any key; here the keys that type, edit, move the cursor, toggle a state or that the desktop acts on (letters, `Space`, arrows, numpad, `CapsLock`, `Insert`, media keys) are refused, because the keys are not withheld from the desktop — `--doctor` says why. `F1`–`F12` still reach the application. `Fn` emits nothing Linux can see. `--watch-hotkey` names the keys you press. |
 | `insertion` | `Paste` (clipboard, instant) or `Type` (simulated keystrokes, where the session allows it). |
 | `pasteShortcut` | The keystroke that pastes: `CtrlV` (default), `CtrlShiftV` for terminals, or `ShiftInsert`. In xterm and terminals of its family, `ShiftInsert` pastes the primary selection — your last selected text — not the dictation. |
 | `keySender` | Who sends the keys: `Auto` (default), `Uinput`, `Xdotool` or `Wtype`. |
 | `clipboardFallback` | `false` by default. `true`: when no way to send keys is available, the text is left in the clipboard and a notification asks you to paste it. A clipboard history keeps it, which is why it is off by default. |
 | `feedback` | `Sound` (default): a tone at each end of the recording. `None`: silence. |
-| `frenchSpacing` | `true` by default, as in HexWin: the French space before `?`, `!`, `;` and `:`. The engine does not reliably report which language it heard, so set it to `false` if you dictate in English. |
+| `frenchSpacing` | `true` by default, as in HexWin: the French space before `?`, `!`, `;` and `:`, in text that reads as French — judged by its small words and accents, since the engine does not say which language it heard; a sentence with no clue counts as French. `false` never adds it. |
 | `modelPath` | Folder of the Parakeet model. A relative path is looked for in `~/.local/share/hexlinux` first, then next to the executable. |
 | `provider` | `cpu`, the only one available: the published native libraries are built for the processor only. |
-| `threads` | Threads given to decoding, 1 to 32. Default 4. |
+| `threads` | Threads given to decoding. `0`, the default, picks one per physical core, up to 8; `1` to `32` is used as written. |
 | `minRecordingMilliseconds` | Below this, the press is treated as accidental. Default 250. |
 | `maxRecordingSeconds` | Stops recording if the key stays held, 5 to 600. Default 120. |
 | `segmentation` | `true` inserts a long dictation piece by piece, while you keep talking. `false` (default) inserts everything at release. |
-| `pauseMilliseconds` | With `segmentation` on, a pause this long closes a piece. Default 700, up to 5000. Detected on the sound level: in a noisy room no pause is seen and the text simply arrives at release. |
+| `pauseMilliseconds` | With `segmentation` on, a pause this long closes a piece. Default 700, up to 5000. Found by Silero VAD, a voice detector that `get-model.sh` installs next to the model (630 KB), so a fan or a street is not taken for speech. Without that file, found on the sound level: in a noisy room no pause is seen and the text simply arrives at release. |
 | `unloadAfterMinutes` | Frees the model — about 1 GB of memory — after this long without dictating. `0` keeps it loaded. Default 5. Reloading starts when you *press* the hotkey, so it overlaps with you speaking. |
 | `logEnabled` | `true` (default) logs every dictation — duration, captured level, characters produced. Never the text. |
 

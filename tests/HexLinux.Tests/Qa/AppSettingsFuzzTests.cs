@@ -102,7 +102,8 @@ public class AppSettingsFuzzTests
         Assert.InRange(settings.MinRecordingMilliseconds, 0, 5_000);
         Assert.InRange(settings.MaxRecordingSeconds, 5, 600);
         Assert.InRange(settings.PauseMilliseconds, 0, 5_000);
-        Assert.InRange(settings.Threads, 1, 32);
+        // 0 is valid since HexWin's pull request #68: one per physical core.
+        Assert.InRange(settings.Threads, 0, 32);
         Assert.InRange(settings.UnloadAfterMinutes, 0, 1_440);
         Assert.Equal("cpu", settings.Provider);
         Assert.True(Enum.IsDefined(settings.Insertion), context);

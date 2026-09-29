@@ -175,45 +175,56 @@ public sealed class TextInjector
     /// caret, one Backspace each: what the dictation itself just inserted,
     /// when the user says "efface ça". Sent by whatever sends the keys of
     /// <paramref name="plan"/> — the virtual keyboard, xdotool or wtype, which
-    /// can all press Backspace. Returns false when nothing could send them.
+    /// can all press Backspace. Inserted when they went out; Refused when the
+    /// session locked meanwhile (see <see cref="InsertAsync"/>); Failed when
+    /// nothing could send them.
     ///
     /// <para>HexWin releases Ctrl first, since with it each Backspace would
     /// take a whole word. The virtual keyboard cannot release a key held on
     /// the real one (see the class notes), so the daemon waits instead, before
     /// calling this, for every modifier to be let go.</para>
     /// </summary>
-    public async Task<bool> EraseAsync(int characters, InjectionPlan plan, IReadOnlyDictionary<string, string> tools)
+    public async Task<InsertionResult> EraseAsync(
+        int characters,
+        InjectionPlan plan,
+        IReadOnlyDictionary<string, string> tools,
+        Func<string?>? sessionRefusal = null)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(tools);
 
         if (characters <= 0)
         {
-            return true;
+            return new InsertionResult(InsertionStatus.Inserted);
         }
 
         if (!plan.IsPossible)
         {
-            return false;
+            return new InsertionResult(InsertionStatus.Failed, "nothing can send Backspace here");
+        }
+
+        // The last moment before the keys leave, as for a paste.
+        if (sessionRefusal is not null && await Task.Run(sessionRefusal).ConfigureAwait(false) is { } refused)
+        {
+            return new InsertionResult(InsertionStatus.Refused, refused);
         }
 
         if (plan.Keys == KeyStroker.Uinput)
         {
             bool sent = await Task.Run(() => _uinput?.Send(KeySequences.Erase(characters)) == true).ConfigureAwait(false);
 
-            if (!sent)
-            {
-                _log("the virtual keyboard did not take the Backspaces");
-            }
-
-            return sent;
+            return sent
+                ? new InsertionResult(InsertionStatus.Inserted)
+                : new InsertionResult(InsertionStatus.Failed, "the virtual keyboard did not take the Backspaces");
         }
 
         // xdotool waits 12 ms between keystrokes by default.
         TimeSpan timeout = KeysTimeout + TimeSpan.FromMilliseconds(20.0 * characters);
         ToolCommand command = ToolCommands.EraseKeys(plan.Keys, characters);
 
-        return await Task.Run(() => RunTool(command, ReadOnlyMemory<byte>.Empty, timeout, tools)).ConfigureAwait(false);
+        return await Task.Run(() => RunTool(command, ReadOnlyMemory<byte>.Empty, timeout, tools)).ConfigureAwait(false)
+            ? new InsertionResult(InsertionStatus.Inserted)
+            : new InsertionResult(InsertionStatus.Failed, $"{command.Tool} could not send Backspace");
     }
 
     private async Task<InsertionResult> PasteAsync(
