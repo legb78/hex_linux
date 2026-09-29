@@ -126,8 +126,9 @@ public sealed record DoctorReport(IReadOnlyList<DoctorCheck> Checks, InjectionPl
 ///
 /// <para>Pure, so that every verdict is a test: which problem is essential,
 /// which only a warning. <b>Essential</b> means dictation cannot work at all:
-/// no model (exit code 2), no microphone, or no way to insert with the
-/// configured mode (3). A keyboard that cannot be read is a warning only: the
+/// no model (exit code 2), no microphone, no way to insert with the
+/// configured mode, or a logind that cannot be asked, whose session guard then
+/// refuses every insertion (3). A keyboard that cannot be read is a warning only: the
 /// shortcut is then unavailable, but <c>hexlinux --toggle</c> still dictates
 /// from a desktop shortcut, with no permission at all.</para>
 /// </summary>
@@ -187,7 +188,7 @@ public static class DoctorEvaluation
             CheckStatus.Info,
             facts.AutostartEnabled ? "on: HexLinux starts with the session" : "off (hexlinux --autostart on)"));
 
-        int exitCode = modelMissing ? 2 : audioBroken || insertionImpossible ? 3 : 0;
+        int exitCode = modelMissing ? 2 : audioBroken || insertionImpossible || GuardFails(facts.Guard) ? 3 : 0;
 
         return new DoctorReport(checks, paste, type, exitCode);
     }
@@ -388,8 +389,25 @@ public static class DoctorEvaluation
             return new DoctorCheck("logind", CheckStatus.Warning, guard.Reason, "lock screens and user switches cannot be detected here");
         }
 
+        if (GuardFails(guard))
+        {
+            return new DoctorCheck(
+                "logind",
+                CheckStatus.Error,
+                "every insertion would be refused: " + guard.Reason,
+                "run HexLinux from the graphical session, and check that loginctl answers there (loginctl show-session $XDG_SESSION_ID)");
+        }
+
         return guard.Allowed
             ? new DoctorCheck("logind", CheckStatus.Ok, guard.Reason)
             : new DoctorCheck("logind", CheckStatus.Warning, "dictation would be refused right now: " + guard.Reason);
     }
+
+    /// <summary>
+    /// logind is there but could not say which session is in front: the guard
+    /// then refuses every insertion, not only the current one. A locked
+    /// screen or another user's session in front passes; this does not.
+    /// </summary>
+    private static bool GuardFails(GuardDecision guard) =>
+        guard.LogindKnown && !guard.Allowed && !guard.Locked && !guard.Inactive;
 }

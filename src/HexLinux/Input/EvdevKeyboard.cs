@@ -53,7 +53,10 @@ public sealed class EvdevKeyboard : IDisposable
 
     /// <param name="codes">A device is listened to when it can send one of these.</param>
     /// <param name="onEvent">Every key event and resynchronisation marker, on the reader thread.</param>
-    /// <param name="onDeviceGone">A keyboard disappeared, on its reader thread.</param>
+    /// <param name="onDeviceGone">
+    /// A keyboard disappeared (on its reader thread), or was closed by
+    /// <see cref="Suspend"/> (on the caller's thread).
+    /// </param>
     /// <param name="log">One line per problem worth knowing, never per key.</param>
     public EvdevKeyboard(IReadOnlySet<int> codes, Action<string, InputEvent> onEvent, Action<string> onDeviceGone, Action<string> log)
     {
@@ -104,9 +107,15 @@ public sealed class EvdevKeyboard : IDisposable
             _readers.Clear();
         }
 
+        // Each closed keyboard is reported gone, as an unplugged one would be:
+        // a key held at that moment will never be seen released, and the
+        // tracker must forget it, or the first press after the session comes
+        // back would pass for auto-repeat and a stale modifier would hold up
+        // every paste.
         foreach (Reader reader in readers)
         {
             reader.Stop();
+            _onDeviceGone(reader.Path);
         }
 
         _log("session inactive: keyboards closed until it is back in front");

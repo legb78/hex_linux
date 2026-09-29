@@ -133,7 +133,7 @@ internal static class Program
             log.Write(message);
 
             using IStatusSurface notifier = CreateSurface(log);
-            notifier.Notify("HexLinux: model not found", "Download it with scripts/get-model.sh, then start HexLinux again.");
+            notifier.Notify("Model not found", "Download it with scripts/get-model.sh, then start HexLinux again.");
             return ModelMissing;
         }
 
@@ -142,6 +142,15 @@ internal static class Program
             log.Write($"internal error: {error.GetType().Name}: {error.Message}");
             SessionLog.WriteCrash(paths, error);
         });
+
+        // Registered before the control socket exists: a signal that comes
+        // as soon as the socket is seen (a script waiting for it, a session
+        // closing during start-up) must end the loop, not kill the process
+        // with the socket file left behind. Completing the loop before it
+        // runs makes Run return at once.
+        using PosixSignalRegistration interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, context => Stop(context, loop, log));
+        using PosixSignalRegistration terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => Stop(context, loop, log));
+        using PosixSignalRegistration hangUp = PosixSignalRegistration.Create(PosixSignal.SIGHUP, context => Stop(context, loop, log));
 
         DictationDaemon? daemon = null;
 
@@ -169,10 +178,6 @@ internal static class Program
 
         SynchronizationContext.SetSynchronizationContext(loop);
         daemon = new DictationDaemon(loop, paths, settings, log, modelPath, surface);
-
-        using PosixSignalRegistration interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, context => Stop(context, loop, log));
-        using PosixSignalRegistration terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => Stop(context, loop, log));
-        using PosixSignalRegistration hangUp = PosixSignalRegistration.Create(PosixSignal.SIGHUP, context => Stop(context, loop, log));
 
         daemon.Start();
 

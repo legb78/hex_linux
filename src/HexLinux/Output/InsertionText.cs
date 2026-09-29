@@ -38,13 +38,27 @@ public static partial class InsertionText
         return ordinal > 1 ? " " + safe : safe;
     }
 
-    /// <summary>Removes control characters and bidirectional controls.</summary>
+    /// <summary>
+    /// Removes control characters and bidirectional controls. Line breaks
+    /// and tabs become one space first rather than vanishing: a text given to
+    /// <c>--inject -</c> on several lines would otherwise arrive with the last
+    /// word of each line glued to the first of the next.
+    /// </summary>
     public static string Sanitize(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        return Unsafe().Replace(text, string.Empty).Trim();
+        string spaced = Breaks().Replace(text, " ");
+
+        return Unsafe().Replace(spaced, string.Empty).Trim();
     }
+
+    /// <summary>
+    /// A run of tabs and line breaks (LF, VT, FF, CR, NEL), with the spaces
+    /// around it: all of it stands for one space between two words.
+    /// </summary>
+    [GeneratedRegex(@" *[\t\n\v\f\r\u0085]+[ \t\n\v\f\r\u0085]*")]
+    private static partial Regex Breaks();
 
     /// <summary>
     /// <c>\p{Cc}</c> is C0, DEL and C1 — escape and the line breaks among

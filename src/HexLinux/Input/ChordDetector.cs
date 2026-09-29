@@ -80,8 +80,10 @@ public sealed class ChordDetector
 
     /// <summary>
     /// True while any key of the shortcut is still held — after a two-key
-    /// shortcut has been half released, for instance. What lets an insertion
-    /// wait for the whole shortcut to be let go.
+    /// shortcut has been half released, for instance. Kept from HexWin, where
+    /// an insertion waited on it; here the daemon waits on the modifiers held
+    /// on every keyboard instead (<see cref="HotkeyTracker.HeldModifiers"/>,
+    /// <c>ModifierGuard</c>), which covers keys outside the shortcut too.
     /// </summary>
     public bool IsAnyHeld => !NothingHeld();
 

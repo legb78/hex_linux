@@ -64,7 +64,7 @@ public static class AutoStart
             message = $"autostart on: {paths.AutostartFile} starts {executable}" + (warning is null ? string.Empty : $" (note: {warning})");
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             message = $"the autostart entry could not be changed: {ex.Message}";
             return false;
@@ -73,8 +73,11 @@ public static class AutoStart
 
     /// <summary>
     /// When the entry exists but starts another executable — HexLinux was
-    /// moved or updated elsewhere — points it at this one. Called when the
-    /// daemon starts; says what it did, or null.
+    /// moved or updated elsewhere — points it at this one. Only the
+    /// <c>Exec</c> line changes: whatever else is in the file was the user's
+    /// or the desktop's doing (a "don't start at login" switch writes
+    /// <c>Hidden=true</c> or <c>X-GNOME-Autostart-enabled=false</c>) and
+    /// stays. Called when the daemon starts; says what it did, or null.
     /// </summary>
     public static string? RefreshIfMoved(AppPaths paths)
     {
@@ -89,9 +92,10 @@ public static class AutoStart
                 return null;
             }
 
-            string wanted = DesktopEntry.Build(executable);
+            string current = File.ReadAllText(paths.AutostartFile);
 
-            if (File.ReadAllText(paths.AutostartFile) == wanted)
+            if (DesktopEntry.ExecOf(current) == DesktopEntry.QuoteExec(executable)
+                || DesktopEntry.WithExec(current, executable) is not { } wanted)
             {
                 return null;
             }
@@ -109,7 +113,7 @@ public static class AutoStart
             Write(paths, wanted);
             return $"autostart entry updated to start {executable}";
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             return null;
         }

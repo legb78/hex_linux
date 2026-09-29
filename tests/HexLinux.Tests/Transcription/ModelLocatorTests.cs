@@ -152,4 +152,169 @@ public class ModelLocatorTests
     {
         Assert.Throws<ArgumentException>(() => Resolve(configured, BuildDirectory, _ => true));
     }
+
+    // --- The order of the search (P14) ------------------------------------------------
+
+    private static List<string> Asked(string configured, string baseDirectory, string? data = DataDirectory, int maxAscent = 6)
+    {
+        List<string> asked = [];
+
+        ModelLocator.Resolve(configured, baseDirectory, data, Home, candidate =>
+        {
+            asked.Add(candidate);
+            return false;
+        }, maxAscent);
+
+        return asked;
+    }
+
+    [Fact]
+    public void From_a_build_folder_the_data_folder_comes_first_then_each_parent_in_turn()
+    {
+        // The whole order, pinned: the folder only the user can write to,
+        // then the executable's, then upward one level at a time, and no
+        // further than the limit.
+        Assert.Equal(
+            [
+                DataDirectory + "/models/m",
+                BuildDirectory + "/models/m",
+                "/home/ada/hex_linux/src/HexLinux/bin/Release/models/m",
+                "/home/ada/hex_linux/src/HexLinux/bin/models/m",
+                "/home/ada/hex_linux/src/HexLinux/models/m",
+                "/home/ada/hex_linux/src/models/m",
+                "/home/ada/hex_linux/models/m",
+                "/home/ada/models/m",
+            ],
+            Asked("models/m", BuildDirectory));
+    }
+
+    [Fact]
+    public void From_an_installed_folder_only_two_places_are_asked()
+    {
+        // The data folder, then beside the executable: nothing above /opt is
+        // ever a candidate.
+        Assert.Equal([DataDirectory + "/models/m", InstalledDirectory + "/models/m"], Asked("models/m", InstalledDirectory));
+    }
+
+    [Fact]
+    public void The_data_folder_wins_over_the_repository_root_from_a_build_folder()
+    {
+        // P14: a developer's own downloaded model, in ~/.local/share, is the
+        // one used, even when the repository also holds one.
+        const string data = DataDirectory + "/models/m";
+        const string repository = "/home/ada/hex_linux/models/m";
+
+        Assert.Equal(data, Resolve("models/m", BuildDirectory, ExistsOnly(repository, data)));
+    }
+
+    [Fact]
+    public void The_executable_folder_wins_over_its_parents()
+    {
+        const string nearby = BuildDirectory + "/models/m";
+        const string repository = "/home/ada/hex_linux/models/m";
+
+        Assert.Equal(nearby, Resolve("models/m", BuildDirectory, ExistsOnly(repository, nearby), data: null));
+    }
+
+    [Fact]
+    public void A_limit_of_zero_keeps_the_search_beside_the_executable()
+    {
+        Assert.Equal([BuildDirectory + "/models/m"], Asked("models/m", BuildDirectory, data: null, maxAscent: 0));
+    }
+
+    [Fact]
+    public void An_absolute_path_is_the_only_place_asked()
+    {
+        // No fallback that could pick a different model than the one named.
+        Assert.Equal(["/opt/models/m"], Asked("/opt/models/m", BuildDirectory));
+    }
+
+    [Fact]
+    public void A_path_starting_with_a_tilde_is_the_only_place_asked()
+    {
+        // "~/models/m" names one folder of the user's home: it is expanded
+        // first, then treated as the absolute path it now is.
+        Assert.Equal([Home + "/models/m"], Asked("~/models/m", InstalledDirectory));
+    }
+
+    [Fact]
+    public void Spaces_around_the_configured_path_are_ignored()
+    {
+        // A stray space typed in settings.json must not make the model
+        // unfindable.
+        const string expected = DataDirectory + "/models/m";
+
+        Assert.Equal(expected, Resolve("  models/m ", InstalledDirectory, ExistsOnly(expected)));
+    }
+
+    [Fact]
+    public void A_trailing_slash_on_the_executable_folder_changes_nothing()
+    {
+        // AppContext.BaseDirectory ends with a separator.
+        const string expected = "/home/ada/hex_linux/models/m";
+
+        Assert.Equal(expected, Resolve("models/m", BuildDirectory + "/", ExistsOnly(expected)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void A_blank_data_folder_is_skipped(string data)
+    {
+        Assert.Equal([InstalledDirectory + "/models/m"], Asked("models/m", InstalledDirectory, data));
+    }
+
+    [Theory]
+    [InlineData("/r/bin/Release/net10.0", true)]
+    [InlineData("/r/bin/Debug/net10.0/linux-x64", true)]
+    [InlineData("/r/bin/Release", false)]
+    [InlineData("/opt/hexlinux", false)]
+    [InlineData("/usr/local/bin", false)]
+    [InlineData("/home/ada/bin/apps/hexlinux", false)]
+    [InlineData("/home/ada/bin/tools/hexlinux/x64", false)]
+    public void Only_a_bin_configuration_framework_folder_counts_as_a_build_folder(string folder, bool expected)
+    {
+        // /usr/local/bin in particular: an installed binary must never climb
+        // the tree. Nor must one unpacked under a personal ~/bin folder, two
+        // or three levels down: only a framework folder (net…) marks a build.
+        Assert.Equal(expected, ModelLocator.IsBuildFolder(new DirectoryInfo(folder)));
+    }
+
+    [Fact]
+    public void The_arguments_are_checked()
+    {
+        Assert.Throws<ArgumentException>(() => ModelLocator.Resolve("models/m", " ", null, Home, _ => true));
+        Assert.Throws<ArgumentNullException>(() => ModelLocator.Resolve("models/m", InstalledDirectory, null, Home, null!));
+        Assert.Throws<ArgumentNullException>(() => ModelLocator.IsBuildFolder(null!));
+        Assert.Throws<ArgumentNullException>(() => ModelLocator.ExpandHome(null!, Home));
+    }
+
+    [Fact]
+    public void An_empty_home_folder_leaves_the_tilde_as_written()
+    {
+        Assert.Equal("~/m", ModelLocator.ExpandHome("~/m", ""));
+        Assert.Equal("~", ModelLocator.ExpandHome("~", ""));
+    }
+
+    [Fact]
+    public void The_real_file_system_variant_finds_a_folder_that_exists()
+    {
+        // The overload the daemon, --transcribe and --doctor call: the same
+        // search, asking the disk. Only a temporary folder is involved.
+        string root = Path.Combine(Path.GetTempPath(), $"hexlinux-models-{Guid.NewGuid():N}");
+        string data = Path.Combine(root, "data");
+        string model = Path.Combine(data, "models", "m");
+        Directory.CreateDirectory(model);
+
+        try
+        {
+            Assert.Equal(model, ModelLocator.Resolve("models/m", Path.Combine(root, "opt"), data));
+            Assert.Null(ModelLocator.Resolve("models/other", Path.Combine(root, "opt"), data));
+            Assert.Equal(model, ModelLocator.Resolve(model, "/nonexistent", null));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }
