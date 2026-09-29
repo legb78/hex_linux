@@ -32,6 +32,12 @@ namespace HexLinux.Ui;
 /// half of the next. A menu click is queued to the worker, which raises
 /// <see cref="Requested"/> there: off the bus's thread, off the daemon's
 /// loop, which the contract lets the daemon post onto.</para>
+///
+/// <para><b>Disposal is the one call that waits</b>, at most
+/// <see cref="FlushLimit"/>, for the notifications already under way: the
+/// daemon notifies "model not found" and exits straight after, and that
+/// message must reach the screen rather than die with the process. It is
+/// called once the daemon's loop has stopped, never while it runs.</para>
 /// </summary>
 [ExcludeFromCodeCoverage(Justification = "D-Bus shell: needs a session bus and a tray host; verified on a private bus by the front harness.")]
 internal sealed class TraySurface : IStatusSurface
@@ -45,6 +51,13 @@ internal sealed class TraySurface : IStatusSurface
 
     /// <summary>Wait before registering again with a watcher that refused or did not answer.</summary>
     private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Longest wait, on disposal, for the notifications still under way. A
+    /// healthy server answers in milliseconds, even with the connection still
+    /// to be made; a silent one must not make quitting feel stuck.
+    /// </summary>
+    private static readonly TimeSpan FlushLimit = TimeSpan.FromSeconds(3);
 
     private readonly string _address;
     private readonly Action<string> _log;
@@ -137,6 +150,12 @@ internal sealed class TraySurface : IStatusSurface
 
         try
         {
+            // First, while the connection is still there to carry them.
+            if (!_notifier.Flush(FlushLimit))
+            {
+                Log($"tray: notifications still pending after {FlushLimit.TotalSeconds:0} s, left behind");
+            }
+
             _stopping.Cancel();
             _work.Writer.TryComplete();
 
@@ -479,6 +498,13 @@ internal sealed class TraySurface : IStatusSurface
 
     private void Execute(TrayMenuItem item, TrayView shown)
     {
+        // A click queued just before the daemon disposed the surface: the
+        // daemon is shutting down and must not be asked for anything more.
+        if (Volatile.Read(ref _disposed) == 1)
+        {
+            return;
+        }
+
         switch (item.Command)
         {
             case MenuCommand.OpenSettingsFile:

@@ -26,6 +26,13 @@ namespace HexLinux.Ui;
 /// its arguments one by one, never through a shell; what it receives is
 /// readable by every local user in <c>/proc</c>, which is why notifications
 /// only ever carry failure messages (see <see cref="NotificationRules"/>).</para>
+///
+/// <para><b>What is under way is known.</b> The daemon may notify and quit at
+/// once — the model is missing at start-up, and HexLinux exits with code 2
+/// right after saying so, as HexWin does after its message box. A
+/// notification still in flight would die with the process, so the surface
+/// asks <see cref="Flush"/> to let the pending ones finish, within a bound,
+/// before it lets go of the bus.</para>
 /// </summary>
 [ExcludeFromCodeCoverage(Justification = "Shell over the session bus and a child process; verified by the front harness.")]
 internal sealed class DesktopNotifier
@@ -58,7 +65,15 @@ internal sealed class DesktopNotifier
     private readonly Action<string> _log;
     private readonly NotificationLedger _ledger = new();
 
-    /// <summary>Whether the server reads markup; null until a server has answered GetCapabilities.</summary>
+    /// <summary>The notifications started and not finished yet, for <see cref="Flush"/>.</summary>
+    private readonly HashSet<Task> _pending = [];
+    private readonly Lock _pendingGate = new();
+
+    /// <summary>
+    /// Whether the server reads markup; null until a server has answered
+    /// GetCapabilities, and again after a server failed, so that the one
+    /// that replaces it is asked afresh.
+    /// </summary>
     private bool? _serverReadsMarkup;
 
     /// <param name="connection">
@@ -76,7 +91,58 @@ internal sealed class DesktopNotifier
     /// <summary>Starts showing the notification and returns at once.</summary>
     public void Notify(string title, string body)
     {
-        _ = ShowAsync(title ?? string.Empty, body ?? string.Empty);
+        Task showing = ShowAsync(title ?? string.Empty, body ?? string.Empty);
+
+        lock (_pendingGate)
+        {
+            _pending.Add(showing);
+        }
+
+        // Removed once done, on whatever thread finishes it. A notification
+        // that finished before this line is simply removed at once.
+        _ = showing.ContinueWith(
+            done =>
+            {
+                lock (_pendingGate)
+                {
+                    _pending.Remove(done);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    /// <summary>
+    /// Waits, at most <paramref name="limit"/>, for the notifications already
+    /// started to be shown or logged. Called on disposal only, after the
+    /// daemon's loop has stopped: it is the one wait of the interface layer,
+    /// and it is bounded, so quitting can never hang on a silent server.
+    /// </summary>
+    /// <returns>True when nothing was left pending.</returns>
+    public bool Flush(TimeSpan limit)
+    {
+        Task[] pending;
+
+        lock (_pendingGate)
+        {
+            pending = [.. _pending];
+        }
+
+        if (pending.Length == 0)
+        {
+            return true;
+        }
+
+        try
+        {
+            // ShowAsync catches everything, so none of these can fault.
+            return Task.WhenAll(pending).Wait(limit);
+        }
+        catch (AggregateException)
+        {
+            return false;
+        }
     }
 
     private async Task ShowAsync(string title, string body)
@@ -96,6 +162,7 @@ internal sealed class DesktopNotifier
 
                 if (outcome == Outcome.NoServer)
                 {
+                    _serverReadsMarkup = null;
                     _log($"notification not shown (no notification server: {reason}): {title}: {body}");
                     return;
                 }
