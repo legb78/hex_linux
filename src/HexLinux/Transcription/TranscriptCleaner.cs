@@ -15,11 +15,16 @@ namespace HexLinux.Transcription;
 ///
 /// The typographic spacing, by contrast, concerns Parakeet directly, which
 /// writes "vendredi?" the English way where French usage expects
-/// "vendredi ?". It is a switch (<c>frenchSpacing</c> in settings.json)
-/// rather than a rule, because it would otherwise apply to every language:
-/// "Are you ready?" became "Are you ready ?". The engine does not reliably say
-/// which language it recognised, so the choice is left to the user; on by
-/// default, as HexWin always did.
+/// "vendredi ?". It only lands in text that reads as French — judged by its
+/// small words and accents, as HexWin does since its pull request #68 — so that an
+/// English "Really?" no longer comes out as "Really ?". The
+/// <c>frenchSpacing</c> switch of settings.json stays, for whoever wants
+/// none of it: on (the default), French spacing in French text; off, the
+/// punctuation is always left as the engine wrote it.
+///
+/// The edits the user speaks — hesitations, "efface ça" — are not handled
+/// here but in <see cref="SegmentJoiner"/>: "efface ça" may aim at a sentence
+/// from an earlier segment, already in the document.
 ///
 /// A deliberately pure class: no dependency, entirely testable.
 /// </summary>
@@ -42,8 +47,9 @@ public static partial class TranscriptCleaner
 
     /// <param name="text">What the engine produced.</param>
     /// <param name="frenchSpacing">
-    /// Puts the space French typography wants before <c>? ! ; : »</c>. Off,
-    /// the punctuation is left as the engine wrote it.
+    /// Puts the space French typography wants before <c>? ! ; : »</c>, when
+    /// the text reads as French. Off, the punctuation is always left as the
+    /// engine wrote it.
     /// </param>
     public static string Clean(string? text, bool frenchSpacing = true)
     {
@@ -58,7 +64,7 @@ public static partial class TranscriptCleaner
         cleaned = HallucinatedCredits().Replace(cleaned, " ");
         cleaned = Whitespace().Replace(cleaned, " ").Trim();
 
-        if (frenchSpacing)
+        if (frenchSpacing && LooksFrench(cleaned))
         {
             cleaned = FrenchPunctuationSpacing().Replace(cleaned, " $1");
         }
@@ -144,6 +150,65 @@ public static partial class TranscriptCleaner
     /// </summary>
     [GeneratedRegex(@"(?<=[\p{L}\p{N}])([?!;:»])(?=\s|$)")]
     private static partial Regex FrenchPunctuationSpacing();
+
+    /// <summary>
+    /// Tells French from English, the two languages people dictate in here, so
+    /// the French spacing never lands in an English sentence: "Really ?" is a
+    /// typo there. Ported from HexWin.
+    ///
+    /// <para>The engine does not say which language it heard, so the text is
+    /// judged by its small words, which every sentence is full of, and by its
+    /// accents. Only words that belong to one language alone are counted:
+    /// "a", "on" or "en" exist in both.</para>
+    ///
+    /// <para><b>A tie counts as French.</b> A single word, "Vendredi?", holds
+    /// no clue either way, and French is what the spacing always assumed.</para>
+    /// </summary>
+    private static bool LooksFrench(string text)
+    {
+        int french = FrenchAccent().Count(text);
+        int english = 0;
+
+        foreach (Match word in Word().Matches(text))
+        {
+            string lower = word.Value.ToLowerInvariant();
+
+            if (FrenchWords.Contains(lower))
+            {
+                french++;
+            }
+            else if (EnglishWords.Contains(lower))
+            {
+                english++;
+            }
+        }
+
+        return french >= english;
+    }
+
+    /// <summary>
+    /// Like the patterns above, these words are data: they are matched against
+    /// what the engine writes, and must not be translated.
+    /// </summary>
+    private static readonly HashSet<string> FrenchWords =
+    [
+        "le", "la", "les", "des", "du", "une", "est", "et", "je", "tu", "il",
+        "elle", "nous", "vous", "ils", "elles", "que", "qui", "pas", "ce", "pour",
+        "dans", "sur", "avec", "mais", "ou", "quoi", "oui", "non", "très", "bien",
+    ];
+
+    private static readonly HashSet<string> EnglishWords =
+    [
+        "the", "is", "are", "was", "and", "i", "you", "he", "she", "we", "they",
+        "it", "that", "this", "what", "not", "to", "of", "for", "with", "but",
+        "yes", "no", "do", "does", "can", "will", "my", "your", "have", "really",
+    ];
+
+    [GeneratedRegex(@"\p{L}+")]
+    private static partial Regex Word();
+
+    [GeneratedRegex(@"[éèêëàâîïôûùüçœ]", RegexOptions.IgnoreCase)]
+    private static partial Regex FrenchAccent();
 
     /// <summary>At least one letter or digit: otherwise there is nothing to insert.</summary>
     [GeneratedRegex(@"[\p{L}\p{N}]")]

@@ -12,8 +12,9 @@ namespace HexLinux.Tests.Qa;
 /// user has to fix by hand, every time. The unit tests show each rule on the
 /// sentence it was written for; these check what must hold for any sentence:
 /// no stray spaces, no French space where <c>frenchSpacing</c> is off, the
-/// French space everywhere it is on, and a second pass that changes
-/// nothing.</para>
+/// French space everywhere it is on in text that reads as French — and none
+/// in English, since HexWin's pull request #68 — and a second pass that
+/// changes nothing.</para>
 /// </summary>
 public class TranscriptCleanerPropertyTests
 {
@@ -30,6 +31,12 @@ public class TranscriptCleanerPropertyTests
     [
         .. PlainWords, "[BLANK_AUDIO]", "(musique)", "(rires)", "♪", "Merci", "Abonnez-vous", "«", "»",
     ];
+
+    /// <summary>
+    /// <see cref="AnyWords"/> without the English ones: whatever is drawn
+    /// from it reads as French, or holds no clue, which counts as French.
+    /// </summary>
+    private static readonly string[] FrenchOrNeutralWords = [.. AnyWords.Except(["Are", "you", "ready"])];
 
     private static readonly string[] Marks = ["?", "!", ";", ":", "»", ".", ",", "?!", string.Empty, string.Empty, string.Empty];
 
@@ -78,17 +85,37 @@ public class TranscriptCleanerPropertyTests
     [Fact]
     public void With_french_spacing_on_no_mark_is_left_glued_to_the_word_before_it()
     {
-        // The switch's promise: "vendredi?" never reaches the document.
+        // The switch's promise: "vendredi?" never reaches the document — in
+        // text that reads as French, the only kind it now applies to.
         var random = new Random(20260929);
         var glued = new Regex(@"[\p{L}\p{N}][?!;:»](\s|$)");
 
         for (int run = 0; run < Runs; run++)
         {
-            string raw = RandomSentence(random, AnyWords, withGaps: true);
+            string raw = RandomSentence(random, FrenchOrNeutralWords, withGaps: true);
 
             string cleaned = TranscriptCleaner.Clean(raw, frenchSpacing: true);
 
             Assert.False(glued.IsMatch(cleaned), $"{raw} -> {cleaned}");
+        }
+    }
+
+    [Fact]
+    public void With_french_spacing_on_an_english_sentence_is_never_spaced()
+    {
+        // HexWin's pull request #68: "Are you ready?" stays as the engine
+        // wrote it, switch on or not, once the sentence reads as English.
+        var random = new Random(20260930);
+        var spaced = new Regex(@"[\p{L}\p{N}] [?!;:»]");
+        string[] english = ["Are", "you", "ready", "ok", "14", "30", "3", "1", "x2"];
+
+        for (int run = 0; run < Runs; run++)
+        {
+            string raw = "Are you " + RandomSentence(random, english, withGaps: false);
+
+            string cleaned = TranscriptCleaner.Clean(raw, frenchSpacing: true);
+
+            Assert.False(spaced.IsMatch(cleaned), $"{raw} -> {cleaned}");
         }
     }
 
