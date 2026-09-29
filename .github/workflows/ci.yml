@@ -11,13 +11,13 @@ name: CI
 #   - NuGet cache   : avoids re-downloading packages every run
 
 on:
-  # No paths-ignore here, deliberately. The branch rules require both jobs
-  # below to report before a pull request can merge, and a workflow that never
-  # triggers never reports: a documentation-only pull request would wait for a
-  # verdict that could not arrive, and no one could merge it — not even with
-  # admin rights, since the rulesets grant no bypass. The Windows sibling of
-  # this project found that out the hard way, on a pull request touching
-  # SECURITY.md alone.
+  # No paths-ignore here, deliberately. The branch rules require the build job
+  # below ("Build, tests and coverage") to report before a pull request can
+  # merge, and a workflow that never triggers never reports: a
+  # documentation-only pull request would wait for a verdict that could not
+  # arrive, and no one could merge it — not even with admin rights, since the
+  # rulesets grant no bypass. The Windows sibling of this project found that
+  # out the hard way, on a pull request touching SECURITY.md alone.
   #
   # `edited` joins the default activity types for the title check: renaming a
   # pull request changes the title its squash will take, and without it the
@@ -115,6 +115,13 @@ jobs:
       # keyboard device, a microphone or a desktop session — none of which a
       # runner has. Measuring them would make the number meaningless.
       #
+      # Code written by source generators is left out as well: the regular
+      # expressions of [GeneratedRegex] expand into classes marked
+      # [GeneratedCode], 850 lines on the first measure against 2,008 of the
+      # project's own, and their coverage says nothing about this project's
+      # tests. The comma between the two names is written %2c, as MSBuild
+      # requires on a command line.
+      #
       # Integration tests are excluded: the model is a 490 MB download and
       # 670 MB on disk.
       - name: Tests and coverage
@@ -122,21 +129,28 @@ jobs:
           dotnet test -c Release --no-build
           --filter "Category!=Integration"
           -p:CollectCoverage=true
-          -p:ExcludeByAttribute=ExcludeFromCodeCoverage
+          -p:ExcludeByAttribute="ExcludeFromCodeCoverage%2cGeneratedCodeAttribute"
           -p:Threshold=75
           -p:ThresholdType=line
           -p:ThresholdStat=total
 
-  # The commit convention, enforced rather than hoped for, on what a squash
-  # merge actually writes: the pull request title, and the subject of its
-  # commit when it has only one (the squash title is COMMIT_OR_PR_TITLE) —
-  # merges written by "Update branch" aside. The subjects of a pull request
-  # with several commits of its own are reported without failing: a squash
-  # only lists them. On a push to develop, every commit that landed is
-  # checked: that is where a squash title edited by hand in the merge dialog,
-  # or a rebase merge, would show. The job runs on both events instead of
-  # being skipped on pushes, for the reason given above: a skipped job would
-  # leave a success on the commit. The rules themselves are in the script.
+  # The commit convention, checked on what a squash merge actually writes:
+  # the pull request title, and the subject of its commit when it has only
+  # one (the squash title is COMMIT_OR_PR_TITLE) — merges written by "Update
+  # branch" aside. The subjects of a pull request with several commits of its
+  # own are reported without failing: a squash only lists them. On a push to
+  # develop, every commit that landed is checked: that is where a squash title
+  # edited by hand in the merge dialog, or a rebase merge, would show (except
+  # after a documentation-only merge, which paths-ignore keeps from running
+  # this workflow at all). The job runs on both events instead of being
+  # skipped on pushes, for the reason given above: a skipped job would leave a
+  # success on the commit. The rules themselves are in the script.
+  #
+  # It is NOT a required check. The rulesets on GitHub are the Windows
+  # sibling's, copied as they are, and require "Build, tests and coverage"
+  # only: a red verdict here is a warning to act on before merging, not a
+  # lock. Making it required is one option of scripts/apply-rulesets.sh
+  # (--require-conventional-commits), left for the owner to decide.
   conventional-commits:
     name: Conventional commits
     runs-on: ubuntu-latest
@@ -160,10 +174,15 @@ jobs:
       # script prints the titles and subjects with those commands stopped
       # under a random token (::stop-commands::), and with their control
       # characters replaced.
+      #
+      # Run through bash rather than executed: a script committed from a
+      # Windows checkout can reach git without its executable bit, and the
+      # first run of this job died on exactly that ("Permission denied",
+      # exit code 126) before checking anything.
       - name: Title and commit subjects
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after }}
-        run: scripts/check-conventional-commits.sh
+        run: bash scripts/check-conventional-commits.sh

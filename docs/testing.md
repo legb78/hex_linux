@@ -182,8 +182,8 @@ GitHub's Ubuntu runners have a kernel with uinput, and projects run
 back. A second, **non-required** job could use that for a loopback test of the
 keyboard reader and the virtual keyboard, with Xvfb for xdotool and xclip,
 `dbus-run-session` for the tray and a headless Sway for wtype. It does not exist
-yet: the required checks stay the unit tests and the commit convention, and
-none of this replaces a real desktop.
+yet: the required check stays `Build, tests and coverage`, and none of this
+replaces a real desktop.
 
 ## Testing on a virtual machine or real hardware
 
@@ -331,6 +331,7 @@ indeed steal the focus there. Record what you see.
 | Microphone | `./hexlinux --record test.wav` | duration and a level above silence |
 | Muted microphone | mute it, the same | "silent" reported, exit code 4 |
 | Engine | `./hexlinux --transcribe test.wav` | what you said |
+| Speed | `--record` 5 s and 40 s of speech (`--seconds 40`), then `--transcribe` each | the time taken, printed; under WSL2 on a Core Ultra 7 255H it was 0.215 s and 1.616 s (4 threads) — record the figures of the machine you test on, native figures are still missing from the README |
 | Tones | `./hexlinux --test-feedback` | a high tone, then a lower one |
 | PipeWire | the same on a PipeWire system (Ubuntu 24.04 is one) | identical: pipewire-pulse serves the same interface |
 
@@ -340,7 +341,7 @@ indeed steal the focus there. Record what you see.
 |-------|-----|----------|
 | Icon states | KDE, and GNOME with the AppIndicator extension (Ubuntu ships it on): dictate | Idle → Recording → Transcribing → Idle; tooltip "HexLinux — ready (Right Ctrl)" |
 | No tray host | GNOME without the extension | no icon; the daemon runs, a log line says so |
-| Menu | each entry | "Dictate now" dictates; "Open settings file" and "Open log folder" open them; "Play tones" switches `feedback` in `settings.json` and nothing else; "Start at login" creates or removes the entry; "Quit" stops the daemon |
+| Menu | each entry | "Dictate now" dictates, and reads "Finish dictation" while recording; "Open settings file" and "Open log folder" open them; "Play tones" switches `feedback` in `settings.json` and nothing else; "Start at login" creates or removes the entry; "Quit" stops the daemon |
 | Notifications | remove the model, then start | a "model not found" notification naming `get-model.sh` |
 
 ### Autostart and permissions
