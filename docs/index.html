@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HexLinux — Local voice dictation for Linux, like HexWin and Hex</title>
+<meta name="description" content="Free, open-source hold-to-talk dictation for Linux — what HexWin is on Windows and Hex on macOS. Hold a key, speak, release: the text lands at your cursor, on X11 or Wayland. Runs entirely offline on CPU with NVIDIA Parakeet TDT v3. No cloud, no account, no subscription.">
+<link rel="canonical" href="https://legb78.github.io/hex_linux/">
+<meta name="theme-color" content="#0d1117">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://legb78.github.io/hex_linux/">
+<meta property="og:title" content="HexLinux — Local voice dictation for Linux">
+<meta property="og:description" content="Hold the right Ctrl, speak, release. The text lands at your cursor. Everything runs on your machine — no cloud, no account, no subscription.">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><text y=%2226%22 font-size=%2226%22>&#127908;</text></svg>">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "HexLinux",
+  "applicationCategory": "UtilitiesApplication",
+  "operatingSystem": "Linux",
+  "description": "Local voice dictation for Linux. Hold a key, speak, release — the text lands at your cursor, on X11 or Wayland. Runs entirely on the machine with NVIDIA Parakeet TDT v3.",
+  "url": "https://legb78.github.io/hex_linux/",
+  "downloadUrl": "https://github.com/legb78/hex_linux/releases/latest",
+  "license": "https://www.apache.org/licenses/LICENSE-2.0",
+  "author": { "@type": "Person", "name": "Djamel OUAZAR" },
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "softwareRequirements": "Linux x64 with glibc 2.27 or later; an X11 or Wayland desktop session; PulseAudio or PipeWire",
+  "featureList": [
+    "Hold-to-talk dictation with a global key, or a desktop shortcut and no permission at all",
+    "Fully offline transcription on CPU",
+    "Automatic language identification across 25 European languages",
+    "Inserts text into the focused application, on X11 and Wayland",
+    "Optional sentence-by-sentence insertion for long dictations",
+    "Tray icon and desktop notifications"
+  ],
+  "isAccessibleForFree": true,
+  "sameAs": "https://github.com/legb78/hex_linux"
+}
+</script>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #151b23; --line: #262d36;
+    --ink: #e6edf3; --muted: #9198a1; --accent: #58a6ff; --warm: #f0883e;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--accent); }
+
+  header { padding: 96px 0 72px; text-align: center; }
+  h1 { font-size: clamp(2.6rem, 8vw, 3.8rem); margin: 0; letter-spacing: -.03em; }
+  .tag { font-size: clamp(1.1rem, 3vw, 1.35rem); margin: 14px 0 8px; }
+  .sub { color: var(--muted); max-width: 30rem; margin: 0 auto; }
+
+  .chord { margin: 34px 0; color: var(--muted); }
+  kbd {
+    font: 600 .95rem/1 var(--mono); color: var(--ink); background: var(--panel);
+    border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 6px;
+    padding: 8px 12px; display: inline-block;
+  }
+
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 30px; }
+  .btn {
+    display: inline-block; padding: 12px 22px; border-radius: 8px; font-weight: 600;
+    text-decoration: none; border: 1px solid var(--line);
+  }
+  .btn.primary { background: var(--accent); color: #06121f; border-color: transparent; }
+  .btn.ghost { color: var(--ink); background: var(--panel); }
+  .meta { color: var(--muted); font-size: .85rem; margin-top: 18px; }
+
+  section { padding: 44px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 1.45rem; letter-spacing: -.02em; margin: 0 0 16px; }
+  h3 { font-size: 1.05rem; margin: 24px 0 8px; }
+  p { margin: 0 0 16px; }
+  .muted { color: var(--muted); }
+
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; }
+  td:last-child { font-family: var(--mono); color: var(--warm); }
+  table.plain td:last-child { font-family: inherit; color: var(--ink); }
+
+  pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 16px 18px; overflow-x: auto; font: .9rem/1.7 var(--mono); margin: 0 0 16px;
+  }
+  pre .c { color: var(--muted); }
+  code { font: .9em var(--mono); background: var(--panel); padding: 2px 6px; border-radius: 4px; }
+  pre code { background: none; padding: 0; }
+
+  ul { padding-left: 20px; margin: 0 0 16px; }
+  li { margin-bottom: 8px; }
+
+  .states { display: flex; flex-wrap: wrap; gap: 10px 22px; list-style: none; padding: 0; margin: 8px 0 20px; }
+  .states li { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: .92rem; }
+  .states svg { width: 22px; height: 22px; flex: none; }
+
+  footer { padding: 40px 0 72px; border-top: 1px solid var(--line); color: var(--muted); font-size: .88rem; }
+  footer p { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+<header>
+  <h1>HexLinux</h1>
+  <p class="tag">Local voice dictation for Linux</p>
+  <p class="sub">Hold the key, speak, release. The text lands at your cursor —
+  in any application, on X11 or Wayland, without ever leaving your machine.</p>
+
+  <p class="chord"><kbd>right Ctrl</kbd> &nbsp;→&nbsp; speak &nbsp;→&nbsp; release</p>
+
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/legb78/hex_linux/releases/latest">Download for Linux</a>
+    <a class="btn ghost" href="https://github.com/legb78/hex_linux">Source on GitHub</a>
+  </div>
+  <p class="meta">Linux · x64 · X11 and Wayland · Apache 2.0 · no account, no subscription, no telemetry</p>
+</header>
+
+<section>
+  <h2>HexWin, for Linux</h2>
+  <p><a href="https://github.com/kitlangton/Hex">Hex</a> is a hold-to-talk dictation
+  app for macOS, and <a href="https://github.com/legb78/hex_windows">HexWin</a> is its
+  Windows answer. <strong>HexLinux is the same idea for the Linux desktop</strong>
+  &mdash; hold a key, speak, release, the text lands at your cursor, and nothing
+  leaves the machine.</p>
+  <p>It is HexWin&rsquo;s sibling rather than a port: the same engine, the same
+  architecture and the same diagnostic modes, written again for the platform &mdash;
+  C# on .NET 10, the kernel&rsquo;s input devices, PulseAudio or PipeWire, and the
+  clipboard and keystroke tools of X11 and Wayland. Underneath, as in the other two,
+  is <strong>NVIDIA Parakeet TDT v3</strong>.</p>
+  <p>If you landed here looking for an offline dictation tool for Linux: this is
+  free, open source under Apache&nbsp;2.0, runs on CPU, and asks for no account.</p>
+</section>
+
+<section>
+  <h2>It answers before you finish thinking</h2>
+  <p>The time the engine takes to transcribe, measured under Linux &mdash; WSL2,
+  Ubuntu 24.04 &mdash; on a Core Ultra 7 255H, the processor of HexWin&rsquo;s own
+  figures, <strong>on CPU</strong> with four threads. No graphics card involved.</p>
+  <table>
+    <thead><tr><th>Speech length</th><th>Transcription time</th></tr></thead>
+    <tbody>
+      <tr><td>5 s</td><td>0.215 s</td></tr>
+      <tr><td>40 s</td><td>1.616 s</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">The loaded model holds 0.8 to 1.1&nbsp;GB of memory, which is
+  why it is released after five idle minutes and loaded again as you press the key,
+  while you speak. Figures on a native Linux install are still to be recorded.</p>
+</section>
+
+<section>
+  <h2>Why it is fast: Parakeet, not Whisper</h2>
+  <p>HexWin tried Whisper first, and dropped it after measurement. Whisper is an
+  autoregressive encoder-decoder, so it pays a fixed cost on every transcription
+  however short the audio is; on a single sentence, that cost is paid in full.</p>
+  <p><strong>Parakeet TDT v3</strong> is a transducer and has no such bottleneck.
+  On Windows, HexWin measured the same five-second clip at <strong>2.29 s</strong>
+  with Whisper on GPU and <strong>0.19 s</strong> with Parakeet on CPU.</p>
+  <p>It is the engine <a href="https://github.com/kitlangton/Hex">Hex</a> uses on
+  macOS too, and it recognises the spoken language on its own among
+  <strong>25 European languages</strong> &mdash; the language you dictate in is never
+  a setting to get wrong.</p>
+</section>
+
+<section>
+  <h2>Two ways to dictate</h2>
+  <h3>Hold a key</h3>
+  <p>Seeing a key held down, whatever window has the focus, means reading the
+  keyboards under <code>/dev/input</code>, which an ordinary user may not do. The
+  archive carries an installer for a udev rule that grants it to the user of the
+  active session. That permission reaches every program you run, not only HexLinux:
+  the README says plainly what it grants before you decide.</p>
+  <h3>Press a shortcut, with no permission at all</h3>
+  <p>Bind <code>hexlinux --toggle</code> to a shortcut of your desktop &mdash; GNOME,
+  KDE Plasma, Sway, Hyprland all have a place for one. Press it to start, press it
+  again to finish. The desktop handles the key, and HexLinux reads no keyboard.</p>
+  <p class="muted">A long dictation does not have to wait for the end: with
+  <code>segmentation</code> on, each pause in your speech &mdash; 700&nbsp;ms by
+  default, up to 5&nbsp;s &mdash; closes a piece, transcribed and inserted while you
+  keep talking.</p>
+</section>
+
+<section>
+  <h2>Nothing leaves your machine</h2>
+  <ul>
+    <li><strong>No cloud, no account, no API key.</strong> Once the model is
+    downloaded, HexLinux needs no network connection at all.</li>
+    <li><strong>Your audio never touches the disk.</strong> The recording lives in
+    memory and is gone the moment the transcription ends.</li>
+    <li><strong>The keyboard is watched, not taken.</strong> HexLinux never grabs a
+    keyboard, so every key still reaches your desktop, and it looks at the keys of
+    its shortcut and nothing else. It stores no keystrokes. The code is short and
+    meant to be read:
+    <a href="https://github.com/legb78/hex_linux/tree/main/src/HexLinux/Input">src/HexLinux/Input</a>.</li>
+    <li><strong>Your words stay where you put them.</strong> The log keeps durations,
+    sound levels and character counts, never the text. The text is handed to the
+    clipboard and keystroke tools on their standard input, never on a command line
+    that every user of the machine could read.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Three commands to start</h2>
+  <p>Download <code>hexlinux-linux-x64.tar.gz</code> from the
+  <a href="https://github.com/legb78/hex_linux/releases/latest">latest release</a>,
+  extract it, then in that folder:</p>
+<pre><code>./get-model.sh      <span class="c"># about 490 MB, once, checked before it is extracted</span>
+./hexlinux --doctor <span class="c"># what HexLinux can see of your session</span>
+./hexlinux</code></pre>
+  <p>Nothing to install for HexLinux itself &mdash; <strong>not even .NET</strong>,
+  which is bundled inside the executable. The clipboard and keystroke tools come from
+  your distribution, and <code>--doctor</code> names the ones your session is
+  missing. <code>./hexlinux --autostart on</code> starts it with your session.</p>
+</section>
+
+<section>
+  <h2>You can tell it is listening</h2>
+  <p>A short tone marks the start of a recording, a lower one its end. On desktops
+  that show tray icons &mdash; KDE Plasma, Xfce, Cinnamon, the bars of wlroots
+  compositors, and GNOME with the AppIndicator extension, which Ubuntu enables &mdash;
+  an icon carries HexWin&rsquo;s colours:</p>
+  <ul class="states">
+    <li><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="#868e96"/></svg>loading the model</li>
+    <li><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="#1971c2"/></svg>ready</li>
+    <li><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="#e03131"/></svg>recording</li>
+    <li><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="#e8590c"/></svg>transcribing</li>
+    <li><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="#404040"/><path d="M5.75 5.75 10.25 10.25M10.25 5.75 5.75 10.25" stroke="#fff" stroke-width="2"/></svg>model not found</li>
+  </ul>
+  <p>Its menu dictates, opens the settings file and the log folder, switches the
+  tones and the start at login, and quits. Failures that need you &mdash; model
+  missing, microphone missing, text that could not be inserted, a locked screen
+  &mdash; arrive as desktop notifications, which never carry what you dictated.
+  Where there is no tray, HexLinux runs all the same, and says so in its log.</p>
+</section>
+
+<section>
+  <h2>What to expect, stated up front</h2>
+  <ul>
+    <li><strong>The keys of the shortcut still reach the desktop.</strong> Linux has
+    no way to hold a key back short of grabbing the whole keyboard, which would put
+    HexLinux on the path of everything you type. The default, right Ctrl alone, does
+    nothing on its own.</li>
+    <li><strong>GNOME and KDE on Wayland accept keys from no ordinary
+    program.</strong> Pasting there needs the virtual keyboard rule the installer
+    offers, and the simulated-typing mode is not possible at all. X11 sessions and
+    wlroots compositors are simpler.</li>
+    <li><strong>Clipboard history keeps the dictation.</strong> In the default paste
+    mode, clipboard managers record the text; unlike HexWin on Windows, HexLinux has
+    no way to keep it out of them. The typing mode leaves the clipboard alone, where
+    the session allows it.</li>
+    <li><strong>A locked screen is seen through logind</strong>, and only lockers
+    that tell logind are: GNOME&rsquo;s and KDE&rsquo;s do, swaylock and hyprlock do
+    not.</li>
+    <li><strong>No circle on the screen</strong>, unlike HexWin: a Wayland window
+    cannot place itself, and GNOME offers no way around it. The tray and the tones
+    carry the signal.</li>
+    <li><strong>The interface is in English.</strong> The dictation itself is in
+    whatever language you speak.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>How it is built</h2>
+  <p>Two layers, kept apart on purpose, as in HexWin. The shells &mdash; keyboard
+  reader, microphone, engine, clipboard and keystroke tools, tray &mdash; wire up the
+  system and decide nothing. Every decision lives in a pure layer tested without a
+  desktop: chord detection, keyboard auto-repeat, keys released out of order, a key
+  left held on a keyboard that was unplugged, a second dictation started while one
+  is still transcribing, the right tool for each kind of Wayland session.</p>
+  <p class="muted">Build and unit tests run anywhere Linux does. The keyboard, the
+  virtual keyboard, the tray and the screen lock need a real desktop session, and
+  the repository says how each one is checked by hand.</p>
+</section>
+
+<footer>
+  <p>HexLinux is free and open source under the
+  <a href="https://github.com/legb78/hex_linux/blob/main/LICENSE">Apache 2.0</a>
+  licence. Copyright 2026 Djamel OUAZAR.</p>
+  <p>Speech recognition by <strong>Parakeet TDT 0.6B v3</strong>, by NVIDIA
+  Corporation, distributed under
+  <a href="https://creativecommons.org/licenses/by/4.0/">CC-BY-4.0</a>, run through
+  <a href="https://github.com/k2-fsa/sherpa-onnx">sherpa-onnx</a>. Full attributions
+  in <a href="https://github.com/legb78/hex_linux/blob/main/NOTICE">NOTICE</a>.</p>
+  <p>The Linux sibling of <a href="https://github.com/legb78/hex_windows">HexWin</a>,
+  inspired by <a href="https://github.com/kitlangton/Hex">Hex</a> for macOS &mdash;
+  same idea, same engine choice, no shared code with Hex.</p>
+</footer>
+
+</div>
+</body>
+</html>
