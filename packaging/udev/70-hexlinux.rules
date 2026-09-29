@@ -1,0 +1,21 @@
+# HexLinux — keyboards readable by the user of the active local session.
+#
+# Installed by install-udev-rules.sh as /etc/udev/rules.d/70-hexlinux.rules.
+#
+# Why: holding the dictation shortcut is seen by reading the keyboards under
+# /dev/input, which only root and the "input" group can do by default. The
+# "uaccess" tag asks systemd-logind to grant the user who sits at the machine
+# an ACL on each keyboard, and to take it back when that user logs out or
+# another one takes the seat. The number sits below 73 on purpose:
+# 73-seat-late.rules is where the tag is turned into the ACL.
+#
+# What it grants, said plainly: read AND write access to every keyboard, for
+# every program of that user, not only HexLinux. Any of them can then read what
+# is typed — passwords included — and inject keystrokes by writing to the
+# device. That is the price of hold-to-talk on Linux. HexLinux itself only
+# reads, never grabs a keyboard, and looks at nothing but its shortcut's keys.
+#
+# Without this rule, dictation still works through `hexlinux --toggle` bound to
+# a desktop shortcut. Never add MODE or GROUP here: either would outlive the
+# session and reach every user.
+SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT_KEYBOARD}=="1", TAG+="uaccess"

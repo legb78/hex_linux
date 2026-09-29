@@ -78,6 +78,13 @@ public sealed class ChordDetector
     /// <summary>True between the moment the shortcut completes and its release.</summary>
     public bool IsActive { get; private set; }
 
+    /// <summary>
+    /// True while any key of the shortcut is still held — after a two-key
+    /// shortcut has been half released, for instance. What lets an insertion
+    /// wait for the whole shortcut to be let go.
+    /// </summary>
+    public bool IsAnyHeld => !NothingHeld();
+
     /// <summary>Every code that can take part in the shortcut.</summary>
     public IReadOnlySet<int> Codes => _requirements.SelectMany(codes => codes).ToHashSet();
 
@@ -173,6 +180,48 @@ public sealed class ChordDetector
         _started = false;
 
         return wasActive ? ChordAction.Cancel : ChordAction.None;
+    }
+
+    /// <summary>
+    /// Forgets some keys without their release ever arriving: the ones held
+    /// on a keyboard that has just disappeared, or whose events the kernel
+    /// dropped.
+    ///
+    /// <para>Narrower than <see cref="Reset"/> on purpose. A Bluetooth
+    /// keyboard falling asleep must not cancel a dictation held on the laptop's
+    /// own keyboard; only when a forgotten key was part of the shortcut in
+    /// progress is the dictation given up — nobody can tell whether it was
+    /// released on purpose.</para>
+    /// </summary>
+    public ChordAction Forget(IEnumerable<int> codes)
+    {
+        ArgumentNullException.ThrowIfNull(codes);
+
+        bool forgotAny = false;
+
+        foreach (int code in codes)
+        {
+            int slot = FindSatisfiedSlot(code);
+
+            if (slot >= 0)
+            {
+                _satisfiedBy[slot] = 0;
+                forgotAny = true;
+            }
+        }
+
+        if (NothingHeld())
+        {
+            _started = false;
+        }
+
+        if (!forgotAny || !IsActive)
+        {
+            return ChordAction.None;
+        }
+
+        IsActive = false;
+        return ChordAction.Cancel;
     }
 
     private bool IsAlreadySatisfying(int code) => Array.IndexOf(_satisfiedBy, code) >= 0;

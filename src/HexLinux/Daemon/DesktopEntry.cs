@@ -7,10 +7,12 @@ namespace HexLinux.Daemon;
 ///
 /// <para>An XDG autostart entry rather than a systemd user unit: every
 /// desktop honours <c>~/.config/autostart</c>, and an entry started there
-/// inherits the session's environment — <c>WAYLAND_DISPLAY</c>,
-/// <c>DISPLAY</c>, <c>XDG_SESSION_ID</c> — which a user unit only gets when
-/// the desktop remembers to export it. Without those variables HexLinux cannot
-/// tell which session it serves, nor insert anything into it.</para>
+/// inherits the session's display — <c>WAYLAND_DISPLAY</c>, <c>DISPLAY</c> —
+/// which a user unit only gets when the desktop remembers to export it.
+/// Without them HexLinux cannot insert anything. <c>XDG_SESSION_ID</c> is not
+/// guaranteed: desktops that start their autostart entries through systemd's
+/// generator leave it out, which is why the session guard falls back to
+/// asking logind for the user's display session.</para>
 ///
 /// <para>Pure, because the quoting is where it goes wrong: a path with a space
 /// or a <c>%</c> in it breaks the <c>Exec</c> line in ways that only show at
@@ -22,6 +24,49 @@ public static class DesktopEntry
 
     /// <summary>Characters the specification reserves in an Exec argument.</summary>
     private const string Reserved = " \t\"'\\><~|&;$*?#()`";
+
+    /// <summary>
+    /// Whether the executable at <paramref name="executablePath"/> may be
+    /// started at every login: a refusal, a warning, or neither.
+    ///
+    /// <para>Refused: the .NET host itself — a development run through
+    /// <c>dotnet hexlinux.dll</c> — which would give an entry that starts
+    /// <c>dotnet</c> with no program; and a binary any other user can replace,
+    /// directly or through its folder (an archive unpacked in <c>/tmp</c>),
+    /// which would be run as this user at each login with whatever was put
+    /// there.</para>
+    ///
+    /// <para>Only a warning when the group can write: Ubuntu gives every user a
+    /// group of their own and a umask that makes new files group-writable, so
+    /// refusing would turn away the ordinary case to guard against a rare
+    /// one.</para>
+    /// </summary>
+    public static (string? Refusal, string? Warning) CheckAutostart(string executablePath, UnixFileMode fileMode, UnixFileMode folderMode)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
+
+        if (string.Equals(Path.GetFileNameWithoutExtension(executablePath), "dotnet", StringComparison.Ordinal))
+        {
+            return ("HexLinux is running through the dotnet host: start the hexlinux executable itself to enable autostart.", null);
+        }
+
+        if ((fileMode & UnixFileMode.OtherWrite) != 0)
+        {
+            return ($"{executablePath} can be modified by any user: fix its permissions (chmod o-w) first.", null);
+        }
+
+        if ((folderMode & UnixFileMode.OtherWrite) != 0)
+        {
+            return ($"the folder of {executablePath} can be modified by any user: move HexLinux somewhere only you can write to.", null);
+        }
+
+        if (((fileMode | folderMode) & UnixFileMode.GroupWrite) != 0)
+        {
+            return (null, $"{executablePath} or its folder is writable by its group: harmless if the group is yours alone.");
+        }
+
+        return (null, null);
+    }
 
     public static string Build(string executablePath)
     {

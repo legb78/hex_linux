@@ -36,6 +36,13 @@ public enum ControlCommand
 /// </summary>
 public static class ControlCommands
 {
+    /// <summary>
+    /// The longest request line the daemon reads. The longest word is six
+    /// letters; anything past this is not a command, and a client that sends
+    /// more is cut off rather than buffered.
+    /// </summary>
+    public const int MaxLineLength = 64;
+
     public static ControlCommand Parse(string? line) => line?.Trim().ToLowerInvariant() switch
     {
         "toggle" => ControlCommand.Toggle,
@@ -71,4 +78,77 @@ public static class ControlCommands
             : ChordAction.None,
         _ => ChordAction.None,
     };
+
+    /// <summary>The word a state goes by on the socket and on the console.</summary>
+    public static string StateName(DictationState state) => state.ToString().ToLowerInvariant();
+}
+
+/// <summary>How the daemon answered a control request.</summary>
+public enum ControlOutcome
+{
+    /// <summary>Acted on, or, for <c>status</c>, answered.</summary>
+    Done,
+
+    /// <summary>Understood, but meaningless in the current state: a start while transcribing.</summary>
+    Ignored,
+
+    /// <summary>Not understood.</summary>
+    Error,
+}
+
+/// <summary>
+/// The one line the daemon sends back. Its grammar, which <c>--help</c>
+/// documents: <c>ok &lt;state&gt;</c>, <c>ignored &lt;state&gt;</c> or
+/// <c>error &lt;word&gt;</c>, where the state is one of <c>loading idle
+/// recording transcribing failed</c>.
+///
+/// <para>A closed vocabulary on purpose: the socket never carries dictated
+/// text, a path or anything else a client could learn from — only which state
+/// the dictation is in, which any process of the user could hear from the
+/// tones anyway.</para>
+/// </summary>
+/// <param name="Outcome">What happened to the request.</param>
+/// <param name="Detail">The state reached, or the error word.</param>
+public readonly record struct ControlReply(ControlOutcome Outcome, string Detail)
+{
+    public static ControlReply Done(DictationState state) => new(ControlOutcome.Done, ControlCommands.StateName(state));
+
+    public static ControlReply Ignored(DictationState state) => new(ControlOutcome.Ignored, ControlCommands.StateName(state));
+
+    public static ControlReply UnknownCommand { get; } = new(ControlOutcome.Error, "unknown-command");
+
+    public string Format() => Outcome switch
+    {
+        ControlOutcome.Done => "ok " + Detail,
+        ControlOutcome.Ignored => "ignored " + Detail,
+        _ => "error " + Detail,
+    };
+
+    /// <summary>Reads a reply line on the client side; false for anything off-grammar.</summary>
+    public static bool TryParse(string? line, out ControlReply reply)
+    {
+        reply = default;
+        string[] parts = (line ?? string.Empty).Trim().Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+
+        if (parts.Length != 2 || parts[1].Contains(' ', StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        ControlOutcome? outcome = parts[0] switch
+        {
+            "ok" => ControlOutcome.Done,
+            "ignored" => ControlOutcome.Ignored,
+            "error" => ControlOutcome.Error,
+            _ => null,
+        };
+
+        if (outcome is null)
+        {
+            return false;
+        }
+
+        reply = new ControlReply(outcome.Value, parts[1]);
+        return true;
+    }
 }

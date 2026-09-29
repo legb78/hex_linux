@@ -16,6 +16,15 @@ namespace HexLinux.Output;
 /// </summary>
 public static class ClipboardFormats
 {
+    /// <summary>
+    /// Past this size the clipboard is not saved, and so not restored: it is
+    /// cleared after the paste instead. A copied image or file list stays far
+    /// below it; what exceeds it is an application's own format for something
+    /// huge, and holding it in memory for every dictation would cost more than
+    /// losing it — which the log then says.
+    /// </summary>
+    public const int MaxSnapshotBytes = 32 * 1024 * 1024;
+
     private static readonly string[] Preference =
     [
         "text/plain;charset=utf-8",

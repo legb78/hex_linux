@@ -15,7 +15,11 @@ namespace HexLinux.Transcription;
 ///
 /// The typographic spacing, by contrast, concerns Parakeet directly, which
 /// writes "vendredi?" the English way where French usage expects
-/// "vendredi ?".
+/// "vendredi ?". It is a switch (<c>frenchSpacing</c> in settings.json)
+/// rather than a rule, because it would otherwise apply to every language:
+/// "Are you ready?" became "Are you ready ?". The engine does not reliably say
+/// which language it recognised, so the choice is left to the user; on by
+/// default, as HexWin always did.
 ///
 /// A deliberately pure class: no dependency, entirely testable.
 /// </summary>
@@ -26,17 +30,22 @@ public static partial class TranscriptCleaner
     /// string if nothing meaningful is left — the caller must then insert
     /// nothing at all.
     /// </summary>
-    public static string Clean(IEnumerable<string?>? segments)
+    public static string Clean(IEnumerable<string?>? segments, bool frenchSpacing = true)
     {
         if (segments is null)
         {
             return string.Empty;
         }
 
-        return Clean(string.Join(' ', segments.Where(s => !string.IsNullOrEmpty(s))));
+        return Clean(string.Join(' ', segments.Where(s => !string.IsNullOrEmpty(s))), frenchSpacing);
     }
 
-    public static string Clean(string? text)
+    /// <param name="text">What the engine produced.</param>
+    /// <param name="frenchSpacing">
+    /// Puts the space French typography wants before <c>? ! ; : »</c>. Off,
+    /// the punctuation is left as the engine wrote it.
+    /// </param>
+    public static string Clean(string? text, bool frenchSpacing = true)
     {
         if (string.IsNullOrWhiteSpace(text))
         {
@@ -48,7 +57,11 @@ public static partial class TranscriptCleaner
         cleaned = MusicalNotes().Replace(cleaned, " ");
         cleaned = HallucinatedCredits().Replace(cleaned, " ");
         cleaned = Whitespace().Replace(cleaned, " ").Trim();
-        cleaned = FrenchPunctuationSpacing().Replace(cleaned, " $1");
+
+        if (frenchSpacing)
+        {
+            cleaned = FrenchPunctuationSpacing().Replace(cleaned, " $1");
+        }
 
         // Once the annotations are gone, nothing may remain but orphaned
         // punctuation. Inserting a lone "." would be worse than inserting

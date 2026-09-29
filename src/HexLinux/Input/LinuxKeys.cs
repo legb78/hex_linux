@@ -13,16 +13,16 @@ namespace HexLinux.Input;
 /// <para>Generic names — "Ctrl", "Super" — each stand for two physical keys.
 /// The kernel never reports a generic code: it always sends the left or the
 /// right key. This class bridges the two, by accepting either.</para>
+///
+/// <para>Every value below was checked by compiling against the kernel
+/// headers of the build machine (<c>linux/input-event-codes.h</c>).</para>
 /// </summary>
 public static class LinuxKeys
 {
-    public const int Escape = 1;
     public const int LeftCtrl = 29;
     public const int LeftShift = 42;
     public const int RightShift = 54;
     public const int LeftAlt = 56;
-    public const int Space = 57;
-    public const int CapsLock = 58;
     public const int RightCtrl = 97;
     public const int RightAlt = 100;
     public const int LeftSuper = 125;
@@ -55,10 +55,23 @@ public static class LinuxKeys
         ["Super"] = [LeftSuper, RightSuper],
         ["LeftSuper"] = [LeftSuper],
         ["RightSuper"] = [RightSuper],
-
-        ["CapsLock"] = [CapsLock],
-        ["Space"] = [Space],
     };
+
+    /// <summary>
+    /// The eight modifier keys. Held while a keystroke is sent, any of them
+    /// changes what the keystroke means — the reason a paste waits for them to
+    /// be let go.
+    /// </summary>
+    public static IReadOnlySet<int> Modifiers { get; } = new HashSet<int>(
+        [LeftCtrl, RightCtrl, LeftShift, RightShift, LeftAlt, RightAlt, LeftSuper, RightSuper]);
+
+    /// <summary>
+    /// Every code a shortcut can be made of. <c>--watch-hotkey</c> listens to
+    /// any device able to send one of them, so that a key can be identified
+    /// before it is written into settings.json.
+    /// </summary>
+    public static IReadOnlySet<int> ShortcutCodes { get; } = new HashSet<int>(
+        [.. Modifiers, .. Enumerable.Range(F13, F24 - F13 + 1)]);
 
     /// <summary>
     /// Codes accepted for a key name. A generic name yields two: "Ctrl" is
@@ -93,7 +106,9 @@ public static class LinuxKeys
     ///
     /// <para>The reverse of <see cref="Resolve"/>, and deliberately the
     /// <i>sided</i> name: the kernel only ever reports the left or the right
-    /// key, so a key seen by <c>--watch-hotkey</c> is named with its side.</para>
+    /// key, so a key seen by <c>--watch-hotkey</c> is named with its side.
+    /// Letters, digits and every other key get no name at all, so the
+    /// diagnostic can never display what is being typed.</para>
     /// </summary>
     public static string? NameOf(int code) => code switch
     {
@@ -105,8 +120,6 @@ public static class LinuxKeys
         RightShift => "RightShift",
         LeftSuper => "LeftSuper",
         RightSuper => "RightSuper",
-        CapsLock => "CapsLock",
-        Space => "Space",
         >= F13 and <= F24 => $"F{13 + (code - F13)}",
         _ => null,
     };
