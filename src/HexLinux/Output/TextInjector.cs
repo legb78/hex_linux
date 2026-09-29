@@ -62,9 +62,13 @@ public sealed class TextInjector
 
     private static readonly TimeSpan KeysTimeout = TimeSpan.FromSeconds(3);
 
+    /// <summary>How long a refused wtype probe is believed before it is asked again.</summary>
+    private static readonly TimeSpan WtypeRetryAfter = TimeSpan.FromMinutes(1);
+
     private readonly UinputKeyboard? _uinput;
     private readonly Action<string> _log;
     private bool? _wtypeWorks;
+    private long _wtypeProbedAt;
 
     /// <param name="uinput">The virtual keyboard, created once by the daemon; null when unavailable.</param>
     /// <param name="log">For failures: tool names and exit codes, never text.</param>
@@ -78,7 +82,10 @@ public sealed class TextInjector
 
     /// <summary>
     /// What the planner needs, looked at now: tools can be installed while
-    /// the daemon runs. The wtype probe is run once, under Wayland only.
+    /// the daemon runs. The wtype probe runs under Wayland only; a success is
+    /// kept for good, a refusal is asked again after
+    /// <see cref="WtypeRetryAfter"/>: a probe made while the compositor was
+    /// still starting must not turn wtype off until the daemon restarts.
     /// </summary>
     public (InjectionContext Context, IReadOnlyDictionary<string, string> Tools) Survey(DesktopSession session)
     {
@@ -86,10 +93,14 @@ public sealed class TextInjector
 
         IReadOnlyDictionary<string, string> tools = ToolLocator.Locate();
 
-        if (_wtypeWorks is null && session.Server == DisplayServer.Wayland && tools.TryGetValue(ToolLocator.Wtype, out string? wtype))
+        bool probeDue = _wtypeWorks is null
+            || (_wtypeWorks == false && Environment.TickCount64 - _wtypeProbedAt >= (long)WtypeRetryAfter.TotalMilliseconds);
+
+        if (probeDue && session.Server == DisplayServer.Wayland && tools.TryGetValue(ToolLocator.Wtype, out string? wtype))
         {
             ToolCommand probe = ToolCommands.WtypeProbe();
             _wtypeWorks = ProcessRunner.Run(wtype, probe.Arguments, ReadOnlyMemory<byte>.Empty, KeysTimeout).Succeeded;
+            _wtypeProbedAt = Environment.TickCount64;
         }
 
         return (new InjectionContext(session, tools.Keys.ToHashSet(StringComparer.Ordinal), _uinput is not null, _wtypeWorks), tools);

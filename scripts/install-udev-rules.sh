@@ -168,7 +168,9 @@ if [ "$with_uinput" -eq 1 ]; then
     if command -v modprobe >/dev/null 2>&1 && modprobe uinput; then
       echo "uinput driver loaded."
     else
-      echo "Could not load the uinput driver now: it loads at the next boot." >&2
+      echo "Could not load the uinput driver now. If this kernel ships it as a module," >&2
+      echo "it loads at the next boot; if it has no uinput at all, pasting under" >&2
+      echo "GNOME or KDE on Wayland stays unavailable (hexlinux --doctor says so)." >&2
     fi
   fi
 elif [ -e "$uinput_target" ]; then

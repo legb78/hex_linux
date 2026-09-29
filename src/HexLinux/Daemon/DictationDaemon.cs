@@ -163,10 +163,9 @@ public sealed class DictationDaemon : IDisposable
         _log.Write($"HexLinux {typeof(DictationDaemon).Assembly.GetName().Version?.ToString(3)} started: "
             + $"{_session.Server} session, shortcut {HotkeyText.Describe(_settings.Hotkey)}, insertion {_settings.Insertion}");
 
-        if (!_surface.IsVisible)
-        {
-            _log.Write("no tray icon is shown: notifications go to this log");
-        }
+        // Nothing is said here about the tray: a surface connects in the
+        // background, so it is never visible yet at this point, and it logs
+        // what it finds itself (no session bus, no tray host) once it knows.
 
         if (AutoStart.RefreshIfMoved(_paths) is { } moved)
         {
@@ -211,7 +210,7 @@ public sealed class DictationDaemon : IDisposable
         {
             _log.Write($"model loading failed: {ex.Message}");
             _coordinator.MarkFailed();
-            Notify("HexLinux: model unusable", "The speech model is missing or damaged. Run scripts/get-model.sh, then restart HexLinux.");
+            Notify("Model unusable", "The speech model is missing or damaged. Run scripts/get-model.sh, then restart HexLinux.");
         }
     }
 
@@ -332,7 +331,7 @@ public sealed class DictationDaemon : IDisposable
             if (stillWanted())
             {
                 _log.Write($"microphone unavailable: {ex.Message}");
-                Notify("HexLinux: no microphone", "The microphone could not be opened. Run hexlinux --doctor to see why.");
+                Notify("No microphone", "The microphone could not be opened. Run hexlinux --doctor to see why.");
             }
 
             return false;
@@ -519,7 +518,7 @@ public sealed class DictationDaemon : IDisposable
             // in the chain would make every later dictation fail in silence.
             // The type and the message only, never the text.
             _log.Write($"segment {ordinal} failed: {ex.GetType().Name}: {ex.Message}");
-            Notify("HexLinux: dictation failed", "A dictation could not be transcribed or inserted. The log has the details.");
+            Notify("Dictation failed", "A dictation could not be transcribed or inserted. The log has the details.");
         }
     }
 
@@ -535,7 +534,7 @@ public sealed class DictationDaemon : IDisposable
         if (!guard.Allowed)
         {
             _log.Write($"not inserted: {guard.Reason}");
-            Notify("HexLinux: dictation not inserted", "The session was locked, not in front, or could not be checked.");
+            Notify("Dictation not inserted", "The session was locked, not in front, or could not be checked.");
             return;
         }
 
@@ -561,7 +560,7 @@ public sealed class DictationDaemon : IDisposable
 
             case InsertionStatus.Failed:
                 _log.Write($"not inserted: {inserted.Problem}");
-                Notify("HexLinux: dictation not inserted", "Nothing could insert the text here. Run hexlinux --doctor to see what is missing.");
+                Notify("Dictation not inserted", "Nothing could insert the text here. Run hexlinux --doctor to see what is missing.");
                 break;
 
             default:
@@ -771,7 +770,7 @@ public sealed class DictationDaemon : IDisposable
 
         if (!done)
         {
-            Notify("HexLinux: autostart unchanged", "Starting with the session could not be changed. The log says why.");
+            Notify("Autostart unchanged", "Starting with the session could not be changed. The log says why.");
         }
 
         PushSnapshot();

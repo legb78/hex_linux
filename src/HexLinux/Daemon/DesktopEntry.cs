@@ -87,6 +87,77 @@ public static class DesktopEntry
     }
 
     /// <summary>
+    /// The value of the <c>Exec</c> key of the <c>[Desktop Entry]</c> group,
+    /// as written (still quoted), or null when there is none.
+    /// </summary>
+    public static string? ExecOf(string content)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+
+        string[] lines = content.Split('\n');
+        int index = ExecLine(lines);
+
+        if (index < 0)
+        {
+            return null;
+        }
+
+        string line = lines[index].TrimEnd('\r');
+        return line[(line.IndexOf('=', StringComparison.Ordinal) + 1)..].Trim();
+    }
+
+    /// <summary>
+    /// The entry with its <c>Exec</c> key pointed at
+    /// <paramref name="executablePath"/>, every other line kept as the user
+    /// left it — <c>Hidden=true</c> or <c>X-GNOME-Autostart-enabled=false</c>
+    /// above all: a desktop's "don't start at login" switch must survive
+    /// HexLinux being moved. Null when the entry has no <c>Exec</c> key to
+    /// point anywhere: it is then not one this program wrote.
+    /// </summary>
+    public static string? WithExec(string content, string executablePath)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
+
+        string[] lines = content.Split('\n');
+        int index = ExecLine(lines);
+
+        if (index < 0)
+        {
+            return null;
+        }
+
+        lines[index] = $"Exec={QuoteExec(executablePath)}";
+        return string.Join('\n', lines);
+    }
+
+    /// <summary>
+    /// Where the <c>Exec</c> key of the <c>[Desktop Entry]</c> group is, or
+    /// -1. Keys of other groups (<c>[Desktop Action …]</c>) have an
+    /// <c>Exec</c> of their own, which is not the one started at login.
+    /// </summary>
+    private static int ExecLine(string[] lines)
+    {
+        bool inMainGroup = false;
+
+        for (int index = 0; index < lines.Length; index++)
+        {
+            string line = lines[index].TrimEnd('\r');
+
+            if (line.StartsWith('['))
+            {
+                inMainGroup = line.Trim() == "[Desktop Entry]";
+            }
+            else if (inMainGroup && line.StartsWith("Exec", StringComparison.Ordinal) && line.AsSpan(4).TrimStart().StartsWith("="))
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
     /// Quotes one argument of an Exec line, per the Desktop Entry
     /// specification.
     ///
@@ -96,8 +167,10 @@ public static class DesktopEntry
     /// each backslash is written twice. And <c>%</c> introduces a field code
     /// such as <c>%f</c>, so a literal one is written <c>%%</c>.</para>
     ///
-    /// <para>A line break cannot be represented in an argument at all, and is
-    /// refused rather than written as something else.</para>
+    /// <para>A line break cannot be represented in an argument at all, and the
+    /// specification allows no other control character in a value either (a
+    /// tab included): both are refused rather than written as something
+    /// else.</para>
     /// </summary>
     public static string QuoteExec(string argument)
     {
@@ -106,6 +179,11 @@ public static class DesktopEntry
         if (argument.AsSpan().IndexOfAny('\n', '\r') >= 0)
         {
             throw new ArgumentException("An Exec argument cannot contain a line break.", nameof(argument));
+        }
+
+        if (argument.Any(char.IsControl))
+        {
+            throw new ArgumentException("An Exec argument cannot contain a control character.", nameof(argument));
         }
 
         string quoted = argument;

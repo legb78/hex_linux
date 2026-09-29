@@ -121,12 +121,17 @@ public static class ModelLocator
     /// <summary>
     /// True for <c>…/bin/&lt;configuration&gt;/&lt;framework&gt;</c>, with or
     /// without a runtime folder below it: where <c>dotnet build</c> and
-    /// <c>dotnet test</c> put the executable.
+    /// <c>dotnet test</c> put the executable. The framework folder must look
+    /// like one (<c>net…</c>): a binary unpacked into <c>~/bin/apps/hexlinux</c>
+    /// is not in a build folder, and must not climb the tree either.
     /// </summary>
     public static bool IsBuildFolder(DirectoryInfo directory)
     {
         ArgumentNullException.ThrowIfNull(directory);
 
-        return directory.Parent?.Parent?.Name == "bin" || directory.Parent?.Parent?.Parent?.Name == "bin";
+        return IsFrameworkUnderBin(directory) || (directory.Parent is { } parent && IsFrameworkUnderBin(parent));
     }
+
+    private static bool IsFrameworkUnderBin(DirectoryInfo framework) =>
+        framework.Name.StartsWith("net", StringComparison.Ordinal) && framework.Parent?.Parent?.Name == "bin";
 }

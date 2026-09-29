@@ -206,4 +206,183 @@ public class TranscriptCleanerTests
 
         Assert.Equal(dictated, TranscriptCleaner.Clean(dictated));
     }
+
+    // --- The frenchSpacing switch -------------------------------------------------
+
+    [Theory]
+    [InlineData("Are you ready?")]
+    [InlineData("Watch out!")]
+    [InlineData("Here is the list: eggs, milk.")]
+    [InlineData("He left; she stayed.")]
+    [InlineData("Tu viens vendredi?")]
+    public void With_french_spacing_off_the_punctuation_stays_as_the_engine_wrote_it(string dictated)
+    {
+        // The reason it is a switch: someone dictating in English must get
+        // "Are you ready?", not "Are you ready ?".
+        Assert.Equal(dictated, TranscriptCleaner.Clean(dictated, frenchSpacing: false));
+    }
+
+    [Fact]
+    public void With_french_spacing_on_English_gets_the_French_space_too()
+    {
+        // The trade-off the switch exists for: the engine does not reliably
+        // say which language it heard, so the rule applies to every one.
+        Assert.Equal("Are you ready ?", TranscriptCleaner.Clean("Are you ready?", frenchSpacing: true));
+    }
+
+    [Fact]
+    public void French_spacing_is_on_when_nothing_is_said()
+    {
+        // HexWin always spaced; a caller that forgets the argument must keep
+        // that behaviour, as settings.json's default does.
+        Assert.Equal("Tu viens ?", TranscriptCleaner.Clean("Tu viens?"));
+        Assert.Equal("Tu viens ?", TranscriptCleaner.Clean(["Tu", "viens?"]));
+    }
+
+    [Fact]
+    public void The_switch_also_applies_to_the_segments()
+    {
+        // Sentence-by-sentence insertion goes through the segment overload:
+        // turning the spacing off must hold there too.
+        string[] segments = ["Are you", "ready?"];
+
+        Assert.Equal("Are you ready?", TranscriptCleaner.Clean(segments, frenchSpacing: false));
+        Assert.Equal("Are you ready ?", TranscriptCleaner.Clean(segments, frenchSpacing: true));
+    }
+
+    [Fact]
+    public void The_closing_guillemet_gets_its_space()
+    {
+        // The engine writes the opening guillemet with its space and glues
+        // the closing one to the word.
+        Assert.Equal("Il a répondu « oui »", TranscriptCleaner.Clean("Il a répondu « oui»"));
+        Assert.Equal("Il a répondu « oui»", TranscriptCleaner.Clean("Il a répondu « oui»", frenchSpacing: false));
+    }
+
+    [Fact]
+    public void A_mark_after_a_digit_is_spaced_too()
+    {
+        // "Il en reste 3!" is a sentence end like any other.
+        Assert.Equal("Il en reste 3 !", TranscriptCleaner.Clean("Il en reste 3!"));
+    }
+
+    [Fact]
+    public void Several_marks_in_one_text_are_all_spaced()
+    {
+        Assert.Equal(
+            "Attention : il pleut ! Tu viens ?",
+            TranscriptCleaner.Clean("Attention: il pleut! Tu viens?"));
+    }
+
+    [Theory]
+    [InlineData("Rendez-vous à 14:30.")]
+    [InlineData("Va sur https://exemple.fr aujourd'hui.")]
+    [InlineData("Le ratio est de 3:1 environ.")]
+    public void Times_and_addresses_are_untouched_whichever_the_switch(string dictated)
+    {
+        Assert.Equal(dictated, TranscriptCleaner.Clean(dictated, frenchSpacing: true));
+        Assert.Equal(dictated, TranscriptCleaner.Clean(dictated, frenchSpacing: false));
+    }
+
+    [Fact]
+    public void Turning_the_spacing_off_does_not_turn_the_cleaning_off()
+    {
+        // The switch is about typography only: the noise annotations and the
+        // invented credits must go either way.
+        Assert.Equal("Are you ready?", TranscriptCleaner.Clean("[Music] Are you ready? Thanks for watching!", frenchSpacing: false));
+    }
+
+    // --- Every noise the parenthesis filter knows ---------------------------------
+
+    [Theory]
+    [InlineData("(Music)")]
+    [InlineData("(musiques)")]
+    [InlineData("(applause)")]
+    [InlineData("(applaudissement)")]
+    [InlineData("(Laughter)")]
+    [InlineData("(rire)")]
+    [InlineData("(bruit)")]
+    [InlineData("(bruits de pas)")]
+    [InlineData("(soupir)")]
+    [InlineData("(soupirs)")]
+    [InlineData("(toux)")]
+    [InlineData("(sifflement)")]
+    [InlineData("(sifflements)")]
+    [InlineData("( MUSIC )")]
+    public void Every_noise_named_in_parentheses_disappears(string annotation)
+    {
+        // The list is data the model emits, in French and in English, in any
+        // case: each entry is checked, since a typo in one would let it be
+        // pasted into the user's document.
+        Assert.Equal("Bonjour.", TranscriptCleaner.Clean($"{annotation} Bonjour."));
+    }
+
+    [Theory]
+    [InlineData("Le groupe (musiciens compris) arrive demain.")]
+    [InlineData("Le film (bruitage maison) sort demain.")]
+    public void A_parenthesis_starting_with_a_longer_word_is_kept(string dictated)
+    {
+        // "musiciens" begins with "music", "bruitage" with "bruit", but they
+        // name people and a craft, not a noise: the word boundary keeps the
+        // dictated parenthesis.
+        Assert.Equal(dictated, TranscriptCleaner.Clean(dictated));
+    }
+
+    [Theory]
+    [InlineData("Écris [BLANK puis la suite.")]
+    [InlineData("Note (musique du film à choisir.")]
+    public void An_annotation_that_is_never_closed_removes_nothing(string dictated)
+    {
+        // An opening bracket or parenthesis the engine never closed is not an
+        // annotation: removing from it to the end would swallow everything
+        // said after it.
+        Assert.Equal(dictated, TranscriptCleaner.Clean(dictated));
+    }
+
+    // --- Every invented credit ------------------------------------------------------
+
+    [Theory]
+    [InlineData("Sous-titres par Jean Dupont.")]
+    [InlineData("Sous-titrage par l'équipe")]
+    [InlineData("Sous-titres réalisé par la communauté")]
+    [InlineData("Sous-titrage Societe Radio-Canada")]
+    [InlineData("Sous-titrage ST' 501")]
+    [InlineData("Sous-titres MFP.")]
+    [InlineData("SousTitreur.com")]
+    [InlineData("Amara.org")]
+    [InlineData("Merci d'avoir regarde cette video")]
+    [InlineData("ABONNEZ-VOUS")]
+    [InlineData("Thanks for watching")]
+    [InlineData("Subtitles by the Amara.org community")]
+    [InlineData("Subtitles by John Smith.")]
+    public void Every_form_of_invented_credits_disappears(string hallucination)
+    {
+        // With or without accents, in any case: Whisper reproduces these as
+        // it saw them in subtitles, and nobody ever dictates them.
+        Assert.Equal(string.Empty, TranscriptCleaner.Clean(hallucination));
+    }
+
+    [Fact]
+    public void Invented_credits_stop_at_the_end_of_their_sentence()
+    {
+        // What follows the credits' full stop was spoken: it must survive.
+        Assert.Equal("Bonjour Marie.", TranscriptCleaner.Clean("Sous-titres par Jean Dupont. Bonjour Marie."));
+    }
+
+    [Fact]
+    public void Musical_symbols_of_every_kind_disappear()
+    {
+        Assert.Equal("Bonjour.", TranscriptCleaner.Clean("🎵 Bonjour. 🎶"));
+        Assert.Equal(string.Empty, TranscriptCleaner.Clean("♪♫🎵🎶"));
+    }
+
+    [Fact]
+    public void Empty_and_null_segments_are_skipped()
+    {
+        // The engine returns an empty string for a segment of silence: it
+        // must not leave a double space in the joined text.
+        string?[] segments = ["Bonjour", null, "", "Marie."];
+
+        Assert.Equal("Bonjour Marie.", TranscriptCleaner.Clean(segments));
+    }
 }

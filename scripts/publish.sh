@@ -71,8 +71,11 @@ if [ "$archive" -eq 1 ]; then
   install -m 0644 -- "$root/packaging/modules-load.d/hexlinux.conf" "$package/packaging/modules-load.d/"
   install -m 0644 -- "$root/README.md" "$root/LICENSE" "$root/NOTICE" "$package/"
 
+  # Entries recorded as owned by root, by number, as the release workflow
+  # does: extracted by root (to install the udev rules), the files would
+  # otherwise belong to whatever uid built the archive.
   tarball="$output/hexlinux-linux-x64.tar.gz"
-  tar -czf "$tarball" -C "$staging" hexlinux
+  tar -czf "$tarball" --owner=0 --group=0 --numeric-owner -C "$staging" hexlinux
   echo ""
   tar -tvzf "$tarball"
   echo ""

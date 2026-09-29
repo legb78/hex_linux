@@ -91,13 +91,15 @@ public readonly record struct LogindState(bool? Active, bool? Locked, string Typ
     }
 
     /// <summary>
-    /// Whether <paramref name="id"/> can be a logind session id: letters,
-    /// digits, "_" and "-". Anything else is not passed to loginctl at all.
+    /// Whether <paramref name="id"/> can be a logind session id: ASCII letters
+    /// and digits only, the rule logind itself applies (<c>session_id_valid</c>
+    /// in systemd). Anything else is not passed to loginctl at all — an id
+    /// starting with "-" would be read there as an option.
     /// </summary>
     public static bool IsValidSessionId(string? id) =>
         !string.IsNullOrEmpty(id)
         && id.Length <= 64
-        && id.All(character => char.IsAsciiLetterOrDigit(character) || character is '_' or '-');
+        && id.All(char.IsAsciiLetterOrDigit);
 
     /// <summary>For the log and the diagnostics.</summary>
     public string Describe()
@@ -129,8 +131,8 @@ public readonly record struct LoginctlAnswer(bool Succeeded, string Output)
 /// <param name="LogindKnown">False when there is no logind to ask at all.</param>
 /// <param name="Inactive">
 /// True when the session is positively not the one in front of the screen —
-/// another user's session is — as opposed to locked or unanswered: the case
-/// where the keyboards are closed until it comes back.
+/// another user's session is — as opposed to merely locked or unanswered: the
+/// case where the keyboards are closed until it comes back.
 /// </param>
 /// <param name="Locked">True when logind positively reports the screen locked.</param>
 public readonly record struct GuardDecision(bool Allowed, string Reason, bool LogindKnown, bool Inactive = false, bool Locked = false)
@@ -224,7 +226,9 @@ public static class SessionGuardPolicy
 
         if (state.Locked == true)
         {
-            return new GuardDecision(false, $"session {id} is locked", true, Locked: true);
+            // Locked and, after a switch of user, not in front either: both
+            // are said, since only the second closes the keyboards.
+            return new GuardDecision(false, $"session {id} is locked", true, Inactive: state.Active == false, Locked: true);
         }
 
         if (state.Active == false)

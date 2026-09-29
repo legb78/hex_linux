@@ -443,8 +443,9 @@ public sealed class AppSettings
     // --- Writing back -----------------------------------------------------------
 
     /// <summary>
-    /// Rewrites one setting in the file, leaving everything else byte for byte
-    /// as it was.
+    /// Rewrites one setting in the file, leaving every other line as it was
+    /// (lines are written back with LF endings, the Linux convention, and
+    /// with a final line break).
     ///
     /// <para>Serialising the whole object would be shorter and wrong: the file
     /// is full of comments explaining what each value does, and
@@ -472,6 +473,12 @@ public sealed class AppSettings
     /// comment: the comma it needs would land inside the comment, and the file
     /// would no longer parse.</para>
     ///
+    /// <para>A key the file does carry, on a line that cannot be rewritten
+    /// (see <see cref="ReplaceLine"/>), is reported and <b>never appended a
+    /// second time</b>: the copy at the bottom would win when the file is
+    /// read, silently overriding the line the user reads and edits, and the
+    /// file would grow by one line at every tick of the menu.</para>
+    ///
     /// <para>The file is written once, or not at all. Returns the keys that
     /// could not be persisted — every key, when the file cannot be read or
     /// written.</para>
@@ -493,32 +500,56 @@ public sealed class AppSettings
             }
 
             List<string> lines = [.. File.ReadAllLines(path)];
-            List<KeyValuePair<string, string>> missing = [];
+            List<KeyValuePair<string, string>> absent = [];
+            List<string> refused = [];
 
             foreach (KeyValuePair<string, string> value in values)
             {
-                if (!ReplaceLine(lines, value.Key, value.Value))
+                switch (ReplaceLine(lines, value.Key, value.Value))
                 {
-                    missing.Add(value);
+                    case LineRewrite.Absent:
+                        absent.Add(value);
+                        break;
+
+                    case LineRewrite.Refused:
+                        refused.Add(value.Key);
+                        break;
+
+                    default:
+                        break;
                 }
             }
 
-            if (appendMissing && missing.Count > 0 && TryAppend(lines, missing))
+            if (appendMissing && absent.Count > 0 && TryAppend(lines, absent))
             {
-                missing.Clear();
+                absent.Clear();
             }
 
-            if (missing.Count < values.Count)
+            if (refused.Count + absent.Count < values.Count)
             {
                 File.WriteAllLines(path, lines);
             }
 
-            return [.. missing.Select(value => value.Key)];
+            HashSet<string> failed = [.. refused, .. absent.Select(value => value.Key)];
+            return [.. allKeys.Where(failed.Contains)];
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             return allKeys;
         }
+    }
+
+    /// <summary>What became of the line of one key.</summary>
+    private enum LineRewrite
+    {
+        /// <summary>The value was replaced.</summary>
+        Replaced,
+
+        /// <summary>No line holds the key: the file predates the setting.</summary>
+        Absent,
+
+        /// <summary>A line holds the key, but cannot be rewritten safely.</summary>
+        Refused,
     }
 
     /// <summary>
@@ -530,8 +561,14 @@ public sealed class AppSettings
     /// blindly would drop the comma with the comment, and a single missing
     /// comma makes the whole file unreadable — every setting back to its
     /// default at the next start, for the sake of one tick in a menu.</para>
+    ///
+    /// <para>So is a line whose value does not stand whole on it: a value
+    /// continued on the next lines, as a formatter lays out a list, or a
+    /// second setting sharing the line. Replacing the line would leave the
+    /// rest of the old value dangling below it, or erase the other
+    /// setting.</para>
     /// </summary>
-    private static bool ReplaceLine(List<string> lines, string key, string jsonValue)
+    private static LineRewrite ReplaceLine(List<string> lines, string key, string jsonValue)
     {
         var pattern = new Regex($@"^(\s*""{Regex.Escape(key)}""\s*:\s*)(.*?)(,?)\s*$");
 
@@ -546,16 +583,32 @@ public sealed class AppSettings
 
             string current = match.Groups[2].Value;
 
-            if (current.Contains("//", StringComparison.Ordinal) || current.Contains("/*", StringComparison.Ordinal))
+            if (current.Contains("//", StringComparison.Ordinal)
+                || current.Contains("/*", StringComparison.Ordinal)
+                || !IsWholeValue(current))
             {
-                return false;
+                return LineRewrite.Refused;
             }
 
             lines[i] = match.Groups[1].Value + jsonValue + match.Groups[3].Value;
-            return true;
+            return LineRewrite.Replaced;
         }
 
-        return false;
+        return LineRewrite.Absent;
+    }
+
+    /// <summary>True when <paramref name="json"/> is exactly one complete JSON value.</summary>
+    private static bool IsWholeValue(string json)
+    {
+        try
+        {
+            JsonDocument.Parse(json).Dispose();
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static bool TryAppend(List<string> lines, List<KeyValuePair<string, string>> values)
