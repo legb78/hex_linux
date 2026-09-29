@@ -86,7 +86,7 @@ public static class ProcessRunner
             var output = new MemoryStream();
             bool truncated = false;
 
-            Task reading = Task.Run(() =>
+            Task reading = OnOwnThread(() =>
             {
                 truncated = CopyCapped(process.StandardOutput.BaseStream, output, maxOutputBytes);
 
@@ -97,8 +97,8 @@ public static class ProcessRunner
                     Kill(process);
                 }
             });
-            Task<string> errors = Task.Run(() => ReadCapped(process.StandardError.BaseStream, ErrorCap));
-            Task writing = Task.Run(() => Feed(process, input));
+            Task<string> errors = OnOwnThread(() => ReadCapped(process.StandardError.BaseStream, ErrorCap));
+            Task writing = OnOwnThread(() => Feed(process, input));
 
             bool exited = process.WaitForExit(timeout);
 
@@ -109,12 +109,17 @@ public static class ProcessRunner
 
             // The readers end when the pipes close, which the exit (or the
             // kill) guarantees; bounded anyway, a grandchild could hold them.
-            Task.WaitAll([reading, errors, writing], TimeSpan.FromSeconds(1));
+            if (!Drained(reading, errors, writing))
+            {
+                // An output not read to its end is not the tool's answer. A
+                // success with half of it would be taken at its word: an
+                // empty clipboard where the user's content was.
+                return new ProcessResult(-1, [], "the tool's output could not be read in time", true, false);
+            }
 
             int exitCode = exited ? process.ExitCode : -1;
-            string error = errors.IsCompletedSuccessfully ? errors.Result : string.Empty;
 
-            return new ProcessResult(exitCode, output.ToArray(), error, !exited, truncated);
+            return new ProcessResult(exitCode, output.ToArray(), errors.Result, !exited, truncated);
         }
     }
 
@@ -152,7 +157,7 @@ public static class ProcessRunner
 
         using (process)
         {
-            Task writing = Task.Run(() => Feed(process, input));
+            Task writing = OnOwnThread(() => Feed(process, input));
             bool exited = process.WaitForExit(timeout);
 
             if (!exited)
@@ -160,9 +165,51 @@ public static class ProcessRunner
                 Kill(process);
             }
 
-            writing.Wait(TimeSpan.FromSeconds(1));
+            // A tool that exited before its input was all written did not get
+            // the text: its success would be a clipboard filled with part of it.
+            if (!Drained(writing))
+            {
+                return new ProcessResult(-1, [], "the tool's input could not be written in time", true, false);
+            }
 
             return new ProcessResult(exited ? process.ExitCode : -1, [], string.Empty, !exited, false);
+        }
+    }
+
+    /// <summary>How long the pipes may take to close once the tool is gone.</summary>
+    private static readonly TimeSpan DrainTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// Runs a pipe's reader or writer on a thread of its own.
+    ///
+    /// <para>Not on the thread pool, on purpose. A pool busy with other work —
+    /// a burst of insertions in the daemon, dozens of tools started at once in
+    /// the test suite — queues a new item until it grows, about one thread per
+    /// half second. The reader of a tool's output then had not started when
+    /// the tool exited, and a clipboard tool that had printed the user's
+    /// content came back empty: CI caught it on a four-core runner, as a
+    /// clipboard cleared instead of restored.</para>
+    /// </summary>
+    private static Task<T> OnOwnThread<T>(Func<T> work) =>
+        Task.Factory.StartNew(work, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    private static Task OnOwnThread(Action work) =>
+        Task.Factory.StartNew(work, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+
+    /// <summary>
+    /// True when every pipe task finished, cleanly, within
+    /// <see cref="DrainTimeout"/>. A task that threw counts as not drained: its
+    /// half of the conversation with the tool is unknown.
+    /// </summary>
+    private static bool Drained(params Task[] tasks)
+    {
+        try
+        {
+            return Task.WaitAll(tasks, DrainTimeout);
+        }
+        catch (AggregateException)
+        {
+            return false;
         }
     }
 
