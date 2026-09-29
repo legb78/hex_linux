@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using HexLinux.Configuration;
+using HexLinux.Interop;
 
 namespace HexLinux.Daemon;
 
@@ -48,11 +49,7 @@ public static class AutoStart
                 return false;
             }
 
-            string folder = Path.GetDirectoryName(executable)!;
-            (string? refusal, string? warning) = DesktopEntry.CheckAutostart(
-                executable,
-                File.GetUnixFileMode(executable),
-                File.GetUnixFileMode(folder));
+            (string? refusal, string? warning) = Check(executable);
 
             if (refusal is not null)
             {
@@ -72,12 +69,14 @@ public static class AutoStart
     }
 
     /// <summary>
-    /// When the entry exists but starts another executable — HexLinux was
-    /// moved or updated elsewhere — points it at this one. Only the
-    /// <c>Exec</c> line changes: whatever else is in the file was the user's
-    /// or the desktop's doing (a "don't start at login" switch writes
-    /// <c>Hidden=true</c> or <c>X-GNOME-Autostart-enabled=false</c>) and
-    /// stays. Called when the daemon starts; says what it did, or null.
+    /// When the entry exists but starts an executable that is gone —
+    /// HexLinux was moved or updated elsewhere — points it at this one
+    /// (<see cref="DesktopEntry.ShouldRepoint"/>: an entry starting another
+    /// copy that still works is left alone). Only the <c>Exec</c> line
+    /// changes: whatever else is in the file was the user's or the desktop's
+    /// doing (a "don't start at login" switch writes <c>Hidden=true</c> or
+    /// <c>X-GNOME-Autostart-enabled=false</c>) and stays. Called when the
+    /// daemon starts; says what it did, or null.
     /// </summary>
     public static string? RefreshIfMoved(AppPaths paths)
     {
@@ -94,28 +93,55 @@ public static class AutoStart
 
             string current = File.ReadAllText(paths.AutostartFile);
 
-            if (DesktopEntry.ExecOf(current) == DesktopEntry.QuoteExec(executable)
+            if (!DesktopEntry.ShouldRepoint(current, executable, IsUsable)
                 || DesktopEntry.WithExec(current, executable) is not { } wanted)
             {
                 return null;
             }
 
-            (string? refusal, _) = DesktopEntry.CheckAutostart(
-                executable,
-                File.GetUnixFileMode(executable),
-                File.GetUnixFileMode(Path.GetDirectoryName(executable)!));
-
-            if (refusal is not null)
+            if (Check(executable).Refusal is not null)
             {
                 return null;
             }
 
             Write(paths, wanted);
-            return $"autostart entry updated to start {executable}";
+            return $"autostart entry updated to start {executable}, the executable it named being gone";
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
         {
             return null;
+        }
+    }
+
+    /// <summary>The facts <see cref="DesktopEntry.CheckAutostart"/> decides on, read from the disk.</summary>
+    private static (string? Refusal, string? Warning) Check(string executable)
+    {
+        string folder = Path.GetDirectoryName(executable)!;
+
+        // What "dotnet build" leaves next to a framework-dependent apphost,
+        // and a self-contained single-file build does not.
+        bool needsDotnetRuntime = File.Exists(Path.Combine(folder, Path.GetFileName(executable) + ".runtimeconfig.json"));
+
+        return DesktopEntry.CheckAutostart(
+            executable,
+            File.GetUnixFileMode(executable),
+            File.GetUnixFileMode(folder),
+            new FileOwners(Libc.OwnerOf(executable), Libc.OwnerOf(folder), Libc.GetEffectiveUid()),
+            needsDotnetRuntime);
+    }
+
+    /// <summary>An executable file, as far as its mode says.</summary>
+    private static bool IsUsable(string path)
+    {
+        try
+        {
+            const UnixFileMode anyExecute = UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
+
+            return File.Exists(path) && (File.GetUnixFileMode(path) & anyExecute) != 0;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
         }
     }
 

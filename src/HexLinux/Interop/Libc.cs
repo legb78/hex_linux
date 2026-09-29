@@ -103,6 +103,38 @@ internal static partial class Libc
     [LibraryImport(Library, EntryPoint = "geteuid")]
     public static partial uint GetEffectiveUid();
 
+    /// <summary><c>AT_FDCWD</c>: a relative path is taken from the working directory.</summary>
+    private const int AtCurrentDirectory = -100;
+
+    /// <summary><c>STATX_UID</c>, in both the request and the returned mask.</summary>
+    private const uint StatxUid = 8;
+
+    /// <summary>
+    /// <c>sizeof(struct statx)</c>, and where its fields are: <c>stx_mask</c>
+    /// at 0, <c>stx_uid</c> at 20 (verified by compiling against the headers
+    /// of glibc 2.39, x86-64). <c>statx</c> rather than <c>stat</c>: its layout
+    /// is fixed by the kernel's UAPI, where <c>struct stat</c> differs between
+    /// architectures, and glibc has had it since 2.28.
+    /// </summary>
+    private const int StatxSize = 256;
+    private const int StatxUidOffset = 20;
+
+    [LibraryImport(Library, EntryPoint = "statx", SetLastError = true, StringMarshalling = StringMarshalling.Utf8)]
+    private static unsafe partial int Statx(int directory, string path, int flags, uint mask, byte* buffer);
+
+    /// <summary>The uid owning <paramref name="path"/>, or null when it cannot be read.</summary>
+    public static unsafe uint? OwnerOf(string path)
+    {
+        byte* buffer = stackalloc byte[StatxSize];
+
+        if (Statx(AtCurrentDirectory, path, 0, StatxUid, buffer) != 0 || (*(uint*)buffer & StatxUid) == 0)
+        {
+            return null;
+        }
+
+        return *(uint*)(buffer + StatxUidOffset);
+    }
+
     [LibraryImport(Library, EntryPoint = "strerror")]
     private static partial nint StrErrorPointer(int error);
 

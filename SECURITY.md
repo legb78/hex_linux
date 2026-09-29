@@ -36,8 +36,11 @@ here plainly, because they are the price of the feature, not a detail.
 Holding a key to dictate means seeing that key whichever window has the focus,
 and on Linux that means reading the keyboard devices under `/dev/input`, below
 the desktop. HexLinux reads them passively: it never grabs a device, so every
-key still reaches the desktop, and it looks at the keys of the shortcut only.
-It never stores or logs a keystroke.
+key still reaches the desktop. Every key of the keyboards it listens to is
+compared, in memory, with the shortcut — another key cancels a dictation being
+held, and the modifiers held are tracked so that the paste can wait for them
+to be let go. It never stores or logs a keystroke, and `--watch-hotkey` names
+only the keys a shortcut can use.
 
 The permission to read those devices is another matter, and it is not
 HexLinux's alone:
@@ -90,6 +93,15 @@ During those 400 ms, the dictation is exposed like anything else you copy:
   clearing described above.
 - Under X11, any client can read the clipboard while it holds the dictation.
 
+**A password manager's secret is cleared, not restored.** KeePassXC marks the
+passwords it copies with `x-kde-passwordManagerHint`, which Klipper and CopyQ
+honour by leaving the copy out of their history. The tools HexLinux drives can
+put back one format only: restored, the password would return without its
+mark, and the history would record it. So when the clipboard offers that mark,
+HexLinux does not save it and clears the clipboard after the paste — the
+password manager still has the secret. `xsel`, which cannot list what the
+clipboard offers, cannot see the mark; `xclip` and `wl-clipboard` can.
+
 `Type` mode avoids the clipboard entirely, where the desktop allows it.
 
 `clipboardFallback`, off by default, **deliberately leaves the dictation in the
@@ -109,27 +121,46 @@ number of characters, never the text. The dictated text is never passed on a
 command line — visible to every local user in `/proc/<pid>/cmdline` — but
 through standard input, to the tool that types or copies it.
 
+The microphone opens as soon as the shortcut is pressed, so that the first
+syllable is not lost, and the dictation is confirmed only once the key has
+been held for `minRecordingMilliseconds` without another key. A shortcut used
+for something else — Right Ctrl+C — therefore opens the microphone for a
+fraction of a second; what it heard is dropped, and a desktop that shows
+microphone use may flash its indicator.
+
 ### The control socket and the session bus
 
 `hexlinux --toggle` and its siblings talk to the running daemon through a Unix
 socket in `$XDG_RUNTIME_DIR/hexlinux/`, a directory only you can open. The
 daemon checks that the other end runs as the same user, and understands five
 words — `toggle`, `start`, `stop`, `cancel`, `status` — none of which carries
-text. The tray menu, on the session bus, offers the same actions plus the two
-switches and Quit. Any process of yours can therefore start a dictation; it
-could already record the microphone directly, so nothing is gained. Nothing a
-caller sends is used as a path or as text.
+text. It reads several connections at once and answers each within a few
+seconds, so a program that opens connections and sends nothing cannot silence
+`--toggle`. The tray menu, on the session bus, offers the same actions plus the
+two switches and Quit. Any process of yours can therefore start a dictation;
+it could already record the microphone directly, so nothing is gained. Nothing
+a caller sends is used as a path or as text.
 
 ### The lock screen and other sessions
 
 The kernel delivers keys from `/dev/input` whatever the desktop is doing: on
-the lock screen, and while another user's session is in front. Before starting
-a dictation and again before inserting it, HexLinux asks systemd-logind whether
-its session is active and unlocked, and refuses otherwise. That relies on the
-screen locker telling logind: GNOME and KDE do; swaylock and hyprlock, as far as
-their source shows, do not, and on those the guard cannot see the lock. Where
-logind is absent altogether (a container), insertion is allowed; where it is
-present but cannot be read, insertion is refused.
+the lock screen, and while another user's session is in front. HexLinux asks
+systemd-logind whether its session is active and unlocked when a dictation
+starts, every couple of seconds while one runs, before inserting it, and once
+more right before the paste keystroke when preparing the clipboard took time.
+It refuses otherwise: a dictation under way stops when the screen locks or
+another user comes in front, and while another user's session is in front the
+keyboards are closed altogether. That relies on the screen locker telling
+logind: GNOME and KDE do; swaylock and hyprlock, as far as their source shows,
+do not, and on those the guard cannot see the lock.
+
+A session attached to no seat — an SSH login, a terminal — is always "active"
+to logind, so it says nothing of the screen. When the user has no graphical
+session, HexLinux asks who sits at the main seat instead: nobody (WSL, a
+machine with no screen) lets the dictation go on; another user's session
+refuses it. Where logind is absent altogether (a container), insertion is
+allowed; where it is present but cannot be asked — `loginctl` missing
+included — insertion is refused.
 
 ### Scripts that run with more rights, or fetch code
 
@@ -139,10 +170,14 @@ present but cannot be read, insertion is refused.
   expected files. If the upstream archive is ever republished, the check fails
   and nothing is installed: the pinned values have to be updated in the script,
   in a reviewed change. A mismatch is a stop, never a warning.
-- **`install-udev-rules.sh`** runs as root. It writes fixed content to
-  `/etc/udev/rules.d` (and, with `--with-uinput`, to `/etc/modules-load.d`) —
-  shown before it is installed, and checked line by line against the rules
-  written in the script itself — and removes it again with `--uninstall`.
+- **`install-udev-rules.sh`** runs as root. It reads each rule file of the
+  archive once, checks it line by line against the rules written in the script
+  itself, shows it, and installs exactly what it checked into
+  `/etc/udev/rules.d` (and, with `--with-uinput`, `/etc/modules-load.d`),
+  root-owned, through a rename — nothing can swap the file between the check
+  and the copy. `--uninstall` removes it again. A script run with `sudo` is
+  only as trustworthy as the copy you run: check the archive with
+  `sha256sum -c SHA256SUMS` first.
 - **The release** is built by CI from `main`, after the unit tests pass again.
   The job that builds has a read-only token; the job that publishes holds the
   only write token, runs no code from the repository, and uses no action from
@@ -176,8 +211,9 @@ dependency with a known vulnerability either way.
 
 ## What is worth reporting
 
-- Anything that makes HexLinux read, keep, log or forward keystrokes beyond the
-  keys of its shortcut, or send any key other than the paste shortcut.
+- Anything that makes HexLinux keep, log or forward a keystroke — each key is
+  compared with the shortcut in memory and forgotten — or send any key other
+  than the paste shortcut.
 - A way to get dictated text inserted into a locked screen or another user's
   session, or written anywhere but the focused application — a log, a file, a
   command line, a notification.
@@ -187,7 +223,8 @@ dependency with a known vulnerability either way.
 - A way for `get-model.sh` to install anything other than the pinned archive,
   or for `install-udev-rules.sh` to write anything other than its fixed rules.
 - Files or folders HexLinux creates readable by other users, or an autostart
-  entry pointing at something other users can replace.
+  entry pointing at something other users can replace (HexLinux refuses a
+  binary or a folder writable by everyone, or owned by another user).
 - A weakness in the release chain that could put another file in a release.
 
 ## What is not a vulnerability

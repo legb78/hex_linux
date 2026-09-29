@@ -243,7 +243,7 @@ public static class DoctorEvaluation
                 "model",
                 CheckStatus.Error,
                 $"\"{facts.Settings.ModelPath}\" was found neither in the data folder nor next to the executable",
-                "download it with scripts/get-model.sh");
+                "download it with get-model.sh (next to hexlinux in the release, scripts/get-model.sh in a clone)");
         }
 
         return facts.ModelProblems.Count == 0
@@ -252,7 +252,7 @@ public static class DoctorEvaluation
                 "model",
                 CheckStatus.Error,
                 "incomplete: " + string.Join("; ", facts.ModelProblems),
-                "download it again with scripts/get-model.sh --force");
+                "download it again with get-model.sh --force (next to hexlinux in the release, scripts/ in a clone)");
     }
 
     private static DoctorCheck KeyboardCheck(DoctorFacts facts)

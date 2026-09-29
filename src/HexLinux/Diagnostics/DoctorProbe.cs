@@ -153,7 +153,8 @@ internal static class DoctorProbe
     }
 
     private static string? DaemonState(AppPaths paths) =>
-        ControlClient.Send(paths, ControlCommand.Status) is { } line && ControlReply.TryParse(line, out ControlReply reply)
+        ControlClient.Send(paths, ControlCommand.Status) is { Delivery: ControlDelivery.Answered, Line: { } line }
+        && ControlReply.TryParse(line, out ControlReply reply)
             ? reply.Detail
             : null;
 }

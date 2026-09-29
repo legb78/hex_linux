@@ -65,6 +65,6 @@ public static partial class InsertionText
     /// them; U+202A–U+202E are the embeddings and overrides, U+2066–U+2069
     /// the isolates.
     /// </summary>
-    [GeneratedRegex(@"[\p{Cc}‪-‮⁦-⁩]")]
+    [GeneratedRegex(@"[\p{Cc}\u202A-\u202E\u2066-\u2069]")]
     private static partial Regex Unsafe();
 }

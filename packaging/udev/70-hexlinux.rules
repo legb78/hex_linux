@@ -13,7 +13,8 @@
 # every program of that user, not only HexLinux. Any of them can then read what
 # is typed — passwords included — and inject keystrokes by writing to the
 # device. That is the price of hold-to-talk on Linux. HexLinux itself only
-# reads, never grabs a keyboard, and looks at nothing but its shortcut's keys.
+# reads and never grabs a keyboard: every key is compared, in memory, with its
+# shortcut, and none is stored or logged.
 #
 # Without this rule, dictation still works through `hexlinux --toggle` bound to
 # a desktop shortcut. Never add MODE or GROUP here: either would outlive the

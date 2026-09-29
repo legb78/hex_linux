@@ -211,12 +211,16 @@ public class CommandLineTests
         Assert.Equal(expected, Parse("--inject", "hello", "--mode", value).InjectMode);
     }
 
-    [Fact]
-    public void An_unknown_inject_mode_falls_back_to_paste_as_in_HexWin()
+    [Theory]
+    [InlineData("Typo")]
+    [InlineData("Types")]
+    [InlineData("")]
+    public void An_unknown_inject_mode_is_refused_rather_than_read_as_paste(string value)
     {
-        // HexWin's behaviour, kept: the mode actually used is printed first
-        // ("Mode     : Paste"), so the fallback does not go unnoticed.
-        Assert.Equal(InsertionMode.Paste, Parse("--inject", "hello", "--mode", "Typo").InjectMode);
+        // QA-10: Type is what a user chooses to keep the text out of the
+        // clipboard; HexWin's fallback to Paste sent "--mode Typo" through
+        // the clipboard anyway. Refused like an unknown sender.
+        AssertUsageError(Parse("--inject", "hello", "--mode", value), $"Unknown mode: {value}");
     }
 
     [Theory]

@@ -143,6 +143,66 @@ public class ParakeetEngineIntegrationTests
         Assert.True(host.IsLoaded);
     }
 
+    [ModelRequiredFact]
+    public async Task Audio_too_short_for_a_single_frame_gives_no_text_instead_of_aborting()
+    {
+        // QA-03: a WAV of 0 or 1 sample, or a file under 44 bytes, made ONNX
+        // Runtime abort the whole process ("Invalid input shape: {0,128}",
+        // SIGABRT). A failure here takes the test run down with it.
+        using ParakeetEngine engine = Load();
+
+        foreach (int samples in new[] { 0, 1, 159, ParakeetEngine.MinimumSamples - 1 })
+        {
+            using var wav = new MemoryStream(WavFile.Create(new byte[samples * RecordingFormat.BytesPerSample]));
+            TranscriptionResult result = await engine.TranscribeAsync(wav);
+
+            Assert.Equal(string.Empty, result.Text);
+        }
+
+        using var header = new MemoryStream(new byte[10]);
+        Assert.Equal(string.Empty, (await engine.TranscribeAsync(header)).Text);
+    }
+
+    [ModelRequiredFact]
+    public async Task Disposing_the_host_during_a_transcription_waits_for_it()
+    {
+        // QA-01 / RV-02: SIGTERM or "Quit" during a transcription freed the
+        // recognizer under the running decode — a segmentation fault that
+        // took the daemon down, reproduced with a minute of audio and a
+        // disposal 200 ms in. A regression here crashes the test run.
+        byte[] fixture = await File.ReadAllBytesAsync(FixturePath);
+        byte[] pcm = fixture[WavFile.HeaderSize..];
+        byte[] minute = WavFile.Create([.. Enumerable.Repeat(pcm, (int)Math.Ceiling(60.0 / RecordingFormat.DurationOf(pcm.Length).TotalSeconds)).SelectMany(bytes => bytes)]);
+
+        var host = new EngineHost(ModelPath, "cpu", 4, true, new IdlePolicy(TimeSpan.Zero), SessionLog.Silent);
+        await host.GetAsync();
+
+        using var wav = new MemoryStream(minute);
+        Task<TranscriptionResult> decoding = host.TranscribeAsync(wav);
+
+        await Task.Delay(200);
+        host.Dispose();
+
+        // Dispose returned after the decode: its result is there, whole.
+        Assert.True(decoding.IsCompleted, "the host was freed while the decode still ran");
+        Assert.Contains("transcription", (await decoding).Text, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_disposed_host_refuses_new_work_cleanly()
+    {
+        // A segment arriving after the stop: an exception the daemon's
+        // catch-all logs, not a crash in native code. No model needed: the
+        // refusal comes before any load.
+        var host = new EngineHost("/nonexistent/hexlinux/model", "cpu", 4, true, new IdlePolicy(TimeSpan.Zero), SessionLog.Silent);
+        host.Dispose();
+
+        using var wav = new MemoryStream(WavFile.CreateSilence(TimeSpan.FromSeconds(1)));
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => host.TranscribeAsync(wav));
+        host.BeginLoad();
+    }
+
     [Fact]
     public void A_missing_model_gives_an_actionable_message()
     {

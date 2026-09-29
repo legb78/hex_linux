@@ -36,8 +36,12 @@ public sealed class CueTones
     /// <summary>Starts the tone and returns at once.</summary>
     public void Play(CueTone tone) => _ = PlayAsync(tone);
 
-    /// <summary>Plays the tone and completes once it has been heard; never throws.</summary>
-    public Task PlayAsync(CueTone tone)
+    /// <summary>
+    /// Plays the tone and completes once it has been heard; never throws.
+    /// The result is null when the tone played, else why it could not —
+    /// which the daemon ignores and <c>--test-feedback</c> reports.
+    /// </summary>
+    public Task<string?> PlayAsync(CueTone tone)
     {
         byte[]? pcm = tone switch
         {
@@ -46,10 +50,10 @@ public sealed class CueTones
             _ => null,
         };
 
-        return pcm is null ? Task.CompletedTask : Task.Run(() => PlayNow(pcm));
+        return pcm is null ? Task.FromResult<string?>(null) : Task.Run(() => PlayNow(pcm));
     }
 
-    private unsafe void PlayNow(byte[] pcm)
+    private unsafe string? PlayNow(byte[] pcm)
     {
         nint stream = 0;
 
@@ -68,10 +72,12 @@ public sealed class CueTones
             }
 
             PulseSimple.Drain(stream, out _);
+            return null;
         }
         catch (Exception ex) when (ex is InvalidOperationException or DllNotFoundException or EntryPointNotFoundException)
         {
             ReportOnce(ex);
+            return ex.Message;
         }
         finally
         {

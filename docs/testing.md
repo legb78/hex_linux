@@ -35,7 +35,7 @@ dotnet build -c Release
 dotnet test                           # unit and integration tests
 ```
 
-Two things about this WSL environment are easy to trip over:
+Three things about this WSL environment are easy to trip over:
 
 - **With systemd enabled, the Wayland socket is not where the environment says.**
   `WAYLAND_DISPLAY=wayland-0` and `XDG_RUNTIME_DIR=/run/user/0/` point at
@@ -55,6 +55,15 @@ Two things about this WSL environment are easy to trip over:
   applications. A clipboard test in WSL overwrites what you copied in Windows,
   and, with Windows' clipboard history on, presumably lands in it (Win+V): save
   what you had first, and use test text you do not mind keeping there.
+- **Insertion needs a logind session.** Before inserting, HexLinux asks logind
+  about the user's session. A WSL shell opened from a Windows terminal is one
+  (`loginctl list-sessions` lists it: a `tty` session with no seat); a command
+  run with `wsl.exe --exec`, while no WSL terminal is open, belongs to none, and
+  every insertion is then refused: "logind did not answer about the user's
+  display session: refused to be safe" (verified on 2026-09-29:
+  `loginctl show-user 0` answers "User ID 0 is not logged in or lingering").
+  Keep a WSL terminal open while testing, or open a session for the time of
+  the tests with `wsl.exe -d Ubuntu -- sleep 900`.
 
 ### Checks that run in WSL
 
@@ -62,13 +71,24 @@ Two things about this WSL environment are easy to trip over:
 |-------|---------|----------|
 | Everything builds, tests pass | the four CI commands in [CONTRIBUTING.md](../CONTRIBUTING.md#tests) | 0 warnings, format clean, coverage at least 75 % |
 | Engine | `./hexlinux --transcribe tests/HexLinux.Tests/Fixtures/bonjour-fr.wav` | a French sentence starting with "Bonjour", and its duration |
+| Engine, wrong file | `--transcribe` of a text file, or of a 44.1 kHz stereo WAV | "not a WAV file", or the format found and how to convert it; exit code 1, no crash |
 | Microphone | `./hexlinux --record /tmp/t.wav --seconds 3` | a 16 kHz mono WAV and its level; a silent result says so (check the Windows microphone privacy settings) |
-| Tones | `./hexlinux --test-feedback` | two tones through the Windows speakers |
+| Tones | `./hexlinux --test-feedback` | two tones through the Windows speakers; with `PULSE_SERVER=unix:/nonexistent`, "No tone could be played" and exit code 3 |
 | Diagnosis | `./hexlinux --doctor` | Wayland or X11 session, no `/dev/input`, no uinput, tools found, audio reachable, the insertion plans |
 | Insertion, Type, X11 | `xterm -e sh -c 'cat > /tmp/out.txt' &` then `./hexlinux --inject "hello" --mode Type --sender xdotool`, clicking into the xterm during the delay, then Enter and Ctrl+D | `/tmp/out.txt` holds `hello` |
 | Clipboard restore | copy something, run `./hexlinux --inject "hello"` into a text field, then paste elsewhere | the dictation landed; the clipboard holds what you had copied |
 | Daemon and socket | `./hexlinux &` then `./hexlinux --status`, `./hexlinux --toggle` twice | `idle`, then a dictation from the microphone inserted at the focus |
 | Single instance | a second `./hexlinux` while the first runs | "already running"; the first one keeps going |
+| Stop during a transcription | `--toggle`, speak twenty seconds, `--toggle`, then at once `kill -TERM` the daemon | exit code 0 and "stopped" in the log a few seconds later, no `crash.log`, no core dump |
+
+Type mode under WSLg's XWayland: do not read one wrong run as a HexLinux
+fault. xdotool picks keys from XWayland's keyboard map, which goes out of step
+with the Windows one: accented characters came out wrong in one or two runs out
+of three, with xdotool alone as with HexLinux, and once a first run typed
+"42." as "$@<" (the shifted level of an AZERTY keyboard) before six runs in a
+row came out right. Test Type with plain ASCII, repeat a failure once, and
+compare with `xdotool type --file -` alone; the headless Sway below types
+accents correctly.
 
 `xterm` is not installed by default: `sudo apt-get install xterm`, or
 `scripts/setup-dev.sh --test-tools`.
@@ -165,10 +185,15 @@ Active=yes
 LockedHint=no
 ```
 
-The session guard therefore sees an active, unlocked session and allows
-insertion, which is right for WSL — and nothing there can lock it, so the
-refusal path cannot be exercised. Without a seat, the `uaccess` rule has no
-one to grant access to either.
+```
+$ loginctl show-seat seat0 --property=ActiveSession
+ActiveSession=
+```
+
+The session guard therefore sees an active, unlocked session, with nobody at
+the seat, and allows insertion, which is right for WSL — and nothing there can
+lock it, so the refusal path cannot be exercised. Without a seat, the
+`uaccess` rule has no one to grant access to either.
 
 **No real desktop.** No GNOME, KDE or wlroots compositor, no screen locker, no
 login to autostart into; `xdotool getactivewindow` fails (WSLg's X server
@@ -242,7 +267,10 @@ On the Windows side, allow desktop applications to use the microphone
    ```
 
    To test a release instead, extract `hexlinux-linux-x64.tar.gz`: it needs no
-   SDK.
+   SDK. For the autostart checks, run `scripts/publish.sh` and use the binary
+   it builds (or the release): the output of `dotnet build` needs the SDK's
+   runtime, which a login session does not find, and `--autostart on`
+   refuses it.
 6. Check the session type with `echo $XDG_SESSION_TYPE` (`wayland` on a fresh
    install), then take a **snapshot**, before any udev rule: it gives a clean
    state for the permission tests.
@@ -295,6 +323,9 @@ indeed steal the focus there. Record what you see.
 | Hotkey with permission | `sudo ./install-udev-rules.sh`, log out and in, `./hexlinux --watch-hotkey`, hold right `Ctrl` | `start` on press, `stop` on release; letters and digits are never printed |
 | The permission itself | `getfacl /dev/input/event*` for the keyboards | your user has an ACL entry, after the install and again after logging out and in |
 | Foreign key cancels | hold right `Ctrl`, press a letter | `cancel`, nothing inserted |
+| A shortcut typed right after a dictation | dictate a long sentence, release, press right `Ctrl`+`C` at once | the dictation is inserted; the copy happens as usual |
+| The shortcut during a `--toggle` dictation | `./hexlinux --toggle`, speak, press and release right `Ctrl`, then right `Ctrl`+`V` | the dictation goes on; the next `--toggle` ends it |
+| A quick right `Ctrl`+letter | right `Ctrl`+`C`, quickly | no tone, nothing in the log: a shortcut, not a dictation |
 | Auto-repeat | hold right `Ctrl` for several seconds | one `start`, one `stop` |
 | Two-key shortcut released out of order | `"hotkey": ["Ctrl", "Super"]`, release Super first | text intact, no system shortcut triggered |
 | Keyboard unplugged, key held | USB keyboard, hold the hotkey, unplug it | the dictation is cancelled; after plugging it back, the hotkey works |
@@ -320,9 +351,12 @@ indeed steal the focus there. Record what you see.
 
 | Check | How | Expected |
 |-------|-----|----------|
-| Locked screen | lock the screen, then trigger `--toggle` from a timer (`sleep 10; ./hexlinux --toggle` started before locking) or over SSH | nothing inserted; a "not inserted: session locked" notification or log line |
+| Locked screen | lock the screen, then trigger `--toggle` from a timer (`sleep 10; ./hexlinux --toggle` started before locking) or over SSH | nothing inserted; a "dictation refused" log line |
+| Locked during a dictation | `./hexlinux --toggle`, speak, lock the screen | the recording stops within a couple of seconds ("dictation stopped: session … is locked" in the log); nothing inserted |
+| Shortcut on the lock screen | hold right `Ctrl` on the lock screen (hotkey installed) | no tone, nothing recorded |
 | Locker without LockedHint | Sway with swaylock, the same test | expected to insert: swaylock does not tell logind (documented limit); record the result |
-| User switch | switch to another user, trigger the hotkey there | nothing inserted into the other session |
+| User switch | switch to another user, trigger the hotkey there | nothing inserted into the other session; the first session's log says its keyboards were closed |
+| Daemon started from SSH | user A starts the daemon over SSH with no graphical session, user B logs in at the machine | A's daemon refuses: "another user's session (…) is in front of the screen" |
 
 ### Microphone, engine, tones
 
@@ -341,14 +375,16 @@ indeed steal the focus there. Record what you see.
 |-------|-----|----------|
 | Icon states | KDE, and GNOME with the AppIndicator extension (Ubuntu ships it on): dictate | Idle → Recording → Transcribing → Idle; tooltip "HexLinux — ready (Right Ctrl)" |
 | No tray host | GNOME without the extension | no icon; the daemon runs, a log line says so |
-| Menu | each entry | "Dictate now" dictates, and reads "Finish dictation" while recording; "Open settings file" and "Open log folder" open them; "Play tones" switches `feedback` in `settings.json` and nothing else; "Start at login" creates or removes the entry; "Quit" stops the daemon |
+| Menu | each entry | "Dictate now" dictates, and reads "Finish dictation" while recording; "Open settings file" and "Open log folder" open them; "Play tones" switches `feedback` in `settings.json` and nothing else; "Start at login" creates or removes the entry; "Quit" stops the daemon — during a transcription too, after it, without a crash |
 | Notifications | remove the model, then start | a "model not found" notification naming `get-model.sh` |
 
 ### Autostart and permissions
 
 | Check | How | Expected |
 |-------|-----|----------|
-| Autostart | `./hexlinux --autostart on`, `desktop-file-validate ~/.config/autostart/hexlinux.desktop`, log out and in, `./hexlinux --status` | no validation error; the daemon is running |
+| Autostart | from the `scripts/publish.sh` output (or the release): `./hexlinux --autostart on`, `desktop-file-validate ~/.config/autostart/hexlinux.desktop`, log out and in, `./hexlinux --status` | no validation error; the daemon is running |
+| Autostart from a `dotnet build` output | `src/HexLinux/bin/Release/net10.0/hexlinux --autostart on` | refused, pointing at `scripts/publish.sh` |
+| Autostart, another copy run once | with the entry pointing at the published binary, start the `dotnet build` one once | the entry still points at the published binary |
 | Autostart off | `./hexlinux --autostart off` | the entry is gone |
 | udev rule install | `sudo ./install-udev-rules.sh`, log out and in, `./hexlinux --doctor` | keyboards readable (and uinput with `--with-uinput`) |
 | udev rule removal | `sudo ./install-udev-rules.sh --uninstall` | no HexLinux file left under `/etc/udev/rules.d`; after logging out and in, `--doctor` shows the keyboards unreadable again |

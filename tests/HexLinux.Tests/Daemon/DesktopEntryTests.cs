@@ -208,7 +208,7 @@ public class DesktopEntryTests
     [Fact]
     public void An_executable_only_its_owner_can_change_is_accepted_without_a_word()
     {
-        (string? refusal, string? warning) = DesktopEntry.CheckAutostart("/home/ana/.local/bin/hexlinux", Executable755, Folder755);
+        (string? refusal, string? warning) = Check("/home/ana/.local/bin/hexlinux", Executable755, Folder755);
 
         Assert.Null(refusal);
         Assert.Null(warning);
@@ -222,7 +222,7 @@ public class DesktopEntryTests
     {
         // A development run through "dotnet hexlinux.dll" would give an entry
         // that starts dotnet with no program at every login.
-        (string? refusal, string? warning) = DesktopEntry.CheckAutostart(host, Executable755, Folder755);
+        (string? refusal, string? warning) = Check(host, Executable755, Folder755);
 
         Assert.Contains("dotnet host", refusal, StringComparison.Ordinal);
         Assert.Null(warning);
@@ -233,7 +233,7 @@ public class DesktopEntryTests
     {
         // "dotnet tool install" puts its commands in ~/.dotnet/tools: only
         // the file name says whether it is the host.
-        (string? refusal, _) = DesktopEntry.CheckAutostart("/home/ana/.dotnet/tools/hexlinux", Executable755, Folder755);
+        (string? refusal, _) = Check("/home/ana/.dotnet/tools/hexlinux", Executable755, Folder755);
 
         Assert.Null(refusal);
     }
@@ -242,7 +242,7 @@ public class DesktopEntryTests
     public void A_binary_any_user_can_modify_is_refused()
     {
         // Anyone could replace it, and it would run as this user at login.
-        (string? refusal, string? warning) = DesktopEntry.CheckAutostart(
+        (string? refusal, string? warning) = Check(
             "/home/ana/hexlinux", Executable755 | UnixFileMode.OtherWrite, Folder755);
 
         Assert.Equal("/home/ana/hexlinux can be modified by any user: fix its permissions (chmod o-w) first.", refusal);
@@ -259,7 +259,7 @@ public class DesktopEntryTests
             | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
             | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute;
 
-        (string? refusal, string? warning) = DesktopEntry.CheckAutostart("/tmp/hexlinux/hexlinux", Executable755, tmp);
+        (string? refusal, string? warning) = Check("/tmp/hexlinux/hexlinux", Executable755, tmp);
 
         Assert.Equal(
             "the folder of /tmp/hexlinux/hexlinux can be modified by any user: move HexLinux somewhere only you can write to.",
@@ -278,7 +278,7 @@ public class DesktopEntryTests
         UnixFileMode file = Executable755 | (fileGroupWritable ? UnixFileMode.GroupWrite : 0);
         UnixFileMode folder = Folder755 | (folderGroupWritable ? UnixFileMode.GroupWrite : 0);
 
-        (string? refusal, string? warning) = DesktopEntry.CheckAutostart("/home/ana/bin/hexlinux", file, folder);
+        (string? refusal, string? warning) = Check("/home/ana/bin/hexlinux", file, folder);
 
         Assert.Null(refusal);
         Assert.Equal("/home/ana/bin/hexlinux or its folder is writable by its group: harmless if the group is yours alone.", warning);
@@ -289,7 +289,7 @@ public class DesktopEntryTests
     {
         UnixFileMode groupWritable = Executable755 | UnixFileMode.GroupWrite;
 
-        (string? refusal, string? warning) = DesktopEntry.CheckAutostart(
+        (string? refusal, string? warning) = Check(
             "/home/ana/bin/hexlinux", groupWritable | UnixFileMode.OtherWrite, groupWritable);
 
         Assert.NotNull(refusal);
@@ -301,6 +301,155 @@ public class DesktopEntryTests
     [InlineData("  ")]
     public void Checking_no_path_is_refused(string path)
     {
-        Assert.Throws<ArgumentException>(() => DesktopEntry.CheckAutostart(path, Executable755, Folder755));
+        Assert.Throws<ArgumentException>(() => Check(path, Executable755, Folder755));
     }
+
+    [Fact]
+    public void A_build_that_needs_the_dotnet_runtime_of_an_SDK_is_refused()
+    {
+        // QA-04: the output of "dotnet build", enabled from a VM following
+        // docs/testing.md, exited at login with "You must install .NET"
+        // (exit code 131) while --autostart on had reported success.
+        (string? refusal, string? warning) = DesktopEntry.CheckAutostart(
+            "/home/ana/hex_linux/src/HexLinux/bin/Release/net10.0/hexlinux", Executable755, Folder755, Ana, needsDotnetRuntime: true);
+
+        Assert.Contains("needs the .NET runtime of an SDK", refusal, StringComparison.Ordinal);
+        Assert.Contains("scripts/publish.sh", refusal, StringComparison.Ordinal);
+        Assert.Null(warning);
+    }
+
+    [Fact]
+    public void A_path_holding_a_percent_sign_is_refused()
+    {
+        // QA-06: written "%%" as the specification wants, but GLib 2.80 looks
+        // "Hex 100%%" up before undoing it, and GNOME never starts the entry.
+        (string? refusal, _) = Check("/home/ana/Hex 100%/hexlinux", Executable755, Folder755);
+
+        Assert.Equal(
+            "the path of /home/ana/Hex 100%/hexlinux holds a '%', which GNOME and the other GLib desktops cannot start: move HexLinux to a folder without one first.",
+            refusal);
+    }
+
+    [Fact]
+    public void A_binary_owned_by_another_user_is_refused()
+    {
+        // SEC-07: a 0755 binary in someone else's home passes the mode checks,
+        // yet its owner can replace it, and it would run as this user at login.
+        (string? refusal, _) = DesktopEntry.CheckAutostart(
+            "/home/bob/hexlinux/hexlinux", Executable755, Folder755, new FileOwners(1001, 1000, 1000), needsDotnetRuntime: false);
+
+        Assert.Equal(
+            "/home/bob/hexlinux/hexlinux belongs to another user (uid 1001), who could replace it: install HexLinux in a folder of your own first.",
+            refusal);
+    }
+
+    [Fact]
+    public void A_folder_owned_by_another_user_is_refused()
+    {
+        // Its owner can rename the binary away and put another in its place.
+        (string? refusal, _) = DesktopEntry.CheckAutostart(
+            "/home/bob/hexlinux/hexlinux", Executable755, Folder755, new FileOwners(1000, 1001, 1000), needsDotnetRuntime: false);
+
+        Assert.StartsWith("the folder of /home/bob/hexlinux/hexlinux belongs to another user (uid 1001)", refusal, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_binary_installed_by_root_is_accepted()
+    {
+        // /opt or /usr/local, owned by root: nobody but root can replace it.
+        (string? refusal, string? warning) = DesktopEntry.CheckAutostart(
+            "/opt/hexlinux/hexlinux", Executable755, Folder755, new FileOwners(0, 0, 1000), needsDotnetRuntime: false);
+
+        Assert.Null(refusal);
+        Assert.Null(warning);
+    }
+
+    [Fact]
+    public void Owners_that_cannot_be_read_only_warn()
+    {
+        // A file system that does not report owners: autostart must still be
+        // possible, and the user told what could not be checked.
+        (string? refusal, string? warning) = DesktopEntry.CheckAutostart(
+            "/home/ana/hexlinux", Executable755, Folder755, new FileOwners(null, 1000, 1000), needsDotnetRuntime: false);
+
+        Assert.Null(refusal);
+        Assert.Equal("the owner of /home/ana/hexlinux or of its folder could not be read.", warning);
+    }
+
+    // --- Pointing an existing entry at the running copy ---------------------------------
+
+    [Fact]
+    public void An_entry_starting_another_copy_that_still_works_is_left_alone()
+    {
+        // QA-05: running a development build once, or a release unpacked in
+        // Downloads to try it, used to take the autostart entry over.
+        string entry = DesktopEntry.Build("/home/ana/.local/bin/hexlinux");
+
+        Assert.False(DesktopEntry.ShouldRepoint(entry, "/home/ana/Downloads/hexlinux/hexlinux", _ => true));
+    }
+
+    [Fact]
+    public void An_entry_starting_a_copy_that_is_gone_is_pointed_at_the_running_one()
+    {
+        // HexLinux moved: the entry follows it, as before.
+        string entry = DesktopEntry.Build("/home/ana/old place/hexlinux");
+        List<string> asked = [];
+
+        Assert.True(DesktopEntry.ShouldRepoint(entry, "/home/ana/.local/bin/hexlinux", path =>
+        {
+            asked.Add(path);
+            return false;
+        }));
+        Assert.Equal(["/home/ana/old place/hexlinux"], asked);
+    }
+
+    [Fact]
+    public void An_entry_that_already_starts_the_running_copy_needs_nothing()
+    {
+        string entry = DesktopEntry.Build("/home/ana/.local/bin/hexlinux");
+
+        Assert.False(DesktopEntry.ShouldRepoint(entry, "/home/ana/.local/bin/hexlinux", _ => throw new InvalidOperationException("nothing to look at")));
+    }
+
+    [Theory]
+    [InlineData("[Desktop Entry]\nExec=/opt/hexlinux --verbose\n")]
+    [InlineData("[Desktop Entry]\nExec=/opt/hexlinux %f\n")]
+    [InlineData("[Desktop Entry]\nExec=\"/opt/hex\"linux\n")]
+    [InlineData("[Desktop Entry]\nType=Application\n")]
+    public void An_entry_whose_exec_is_not_one_plain_path_is_left_alone(string entry)
+    {
+        // Edited by hand, or not written by HexLinux: nothing to repoint.
+        Assert.False(DesktopEntry.ShouldRepoint(entry, "/home/ana/.local/bin/hexlinux", _ => false));
+    }
+
+    [Theory]
+    [InlineData("/opt/hexlinux")]
+    [InlineData("/home/ana/My Apps/hexlinux")]
+    [InlineData("/home/ana/100% sure/hexlinux")]
+    [InlineData("/home/ana/a\"b`c$d\\e/hexlinux")]
+    [InlineData("/home/ana/(x) & 'y' ~z/hexlinux")]
+    public void Every_exec_value_written_is_read_back_as_its_path(string path)
+    {
+        // The reading undoes the three layers of the writing, whatever the
+        // path holds.
+        Assert.Equal(path, DesktopEntry.UnquoteExec(DesktopEntry.QuoteExec(path)));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("\"\"")]
+    [InlineData("/opt/hex linux")]
+    [InlineData("\"/opt/hex\"linux\"")]
+    [InlineData("/opt/hexlinux\\q")]
+    [InlineData("/opt/%f")]
+    public void An_exec_value_that_is_no_single_path_reads_as_none(string exec)
+    {
+        Assert.Null(DesktopEntry.UnquoteExec(exec));
+    }
+
+    private static readonly FileOwners Ana = new(1000, 1000, 1000);
+
+    /// <summary>The mode checks, for an executable and a folder of the user's own, in a self-contained build.</summary>
+    private static (string? Refusal, string? Warning) Check(string path, UnixFileMode file, UnixFileMode folder) =>
+        DesktopEntry.CheckAutostart(path, file, folder, Ana, needsDotnetRuntime: false);
 }

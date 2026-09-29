@@ -66,6 +66,16 @@ public class ControlReplyTests
         Assert.Equal("recording", reply.Detail);
     }
 
+    [Fact]
+    public void A_daemon_too_busy_to_act_in_time_says_so_in_one_word()
+    {
+        // A --start that waits on a slow microphone must not look to the
+        // client like a daemon that is not there (RV-09).
+        Assert.Equal("error busy", ControlReply.Busy.Format());
+        Assert.True(ControlReply.TryParse(ControlReply.Busy.Format(), out ControlReply reply));
+        Assert.Equal(ControlReply.Busy, reply);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]

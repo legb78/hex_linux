@@ -43,8 +43,9 @@ through the diagnostic modes.
 `InputDeviceCatalog`, `RecordingGuards`, `SpeechSegmenter`,
 `TranscriptCleaner`, `AppSettings`, `AppPaths`, `ModelLocator`,
 `DesktopSession`, `LogindState` and `SessionGuardPolicy`, `ControlCommands`,
-`CommandLine`, `DesktopEntry`, `DictationCoordinator`, `IdlePolicy`,
-`FeedbackPolicy`, `InjectionPlanner`, `ToolCommands`, `KeySequences`,
+`ChordCommands`, `CommandLine`, `DesktopEntry`, `DictationCoordinator`,
+`IdlePolicy`, `SessionPollPolicy`, `FeedbackPolicy`, `InjectionPlanner`,
+`ToolCommands`, `KeySequences`, `ClipboardFormats`, `WavFile`,
 `DoctorEvaluation`, and for the tray `TrayMenu`, `TrayPresentation` and
 `NotificationRules` — holds every decision and is tested without any of that.
 
@@ -65,6 +66,13 @@ The integration tests load the real engine. Without the model on disk they
 **skip themselves with a message** rather than fail, so a fresh clone gives a
 green run: nobody has to tell real failures apart from a missing 490 MB
 download. Fetch the model and they run for real.
+
+The tests marked `Category=Shell` drive the process shells — `ProcessRunner`,
+`Clipboard`, `TextInjector` — against small fake tools written to a temporary
+folder (`/bin/sh` scripts standing for xclip and xdotool). They need no desktop,
+run in CI with the unit tests, and hold the guarantees no manual check sees
+reliably: a forking clipboard tool that does not deadlock, a time limit that
+kills, the dictation on standard input and never in arguments.
 
 CI excludes them up front — a runner has no reason to spend minutes discovering
 they would skip. To run exactly what CI runs, in the same order:

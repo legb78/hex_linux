@@ -103,9 +103,7 @@ public sealed class ChordDetector
             return ChordAction.None;
         }
 
-        int slot = FindFreeSlot(code);
-
-        if (slot < 0)
+        if (!TryPlace(code))
         {
             // Key foreign to the shortcut. During a dictation it interrupts:
             // RightCtrl held and then C pressed is a copy, and the user was
@@ -118,8 +116,6 @@ public sealed class ChordDetector
 
             return ChordAction.None;
         }
-
-        _satisfiedBy[slot] = code;
 
         // Complete again while _started still holds: the shortcut was only
         // half released. Nothing starts rather than opening a dictation over
@@ -228,18 +224,55 @@ public sealed class ChordDetector
 
     private bool IsAlreadySatisfying(int code) => Array.IndexOf(_satisfiedBy, code) >= 0;
 
-    private int FindFreeSlot(int code)
+    /// <summary>
+    /// Gives <paramref name="code"/> a slot: a free one that accepts it, or
+    /// else one freed by moving its key to another slot that accepts that
+    /// key too.
+    ///
+    /// <para>Taking the first free slot is not enough when names overlap:
+    /// with <c>["Ctrl", "RightCtrl"]</c>, Right Ctrl pressed first took the
+    /// "Ctrl" slot, and Left Ctrl then fitted nowhere — the shortcut only
+    /// worked with Left Ctrl first (QA-07). A shortcut holds a handful of
+    /// keys, so the search is trivially small.</para>
+    /// </summary>
+    private bool TryPlace(int code)
     {
         for (int i = 0; i < _requirements.Length; i++)
         {
-            if (_satisfiedBy[i] == 0 && Array.IndexOf(_requirements[i], code) >= 0)
+            if (_satisfiedBy[i] == 0 && Accepts(i, code))
             {
-                return i;
+                _satisfiedBy[i] = code;
+                return true;
             }
         }
 
-        return -1;
+        return TryPlaceMoving(code, new bool[_requirements.Length]);
     }
+
+    /// <summary>An augmenting path, as in bipartite matching: each slot visited once.</summary>
+    private bool TryPlaceMoving(int code, bool[] visited)
+    {
+        for (int i = 0; i < _requirements.Length; i++)
+        {
+            if (visited[i] || !Accepts(i, code))
+            {
+                continue;
+            }
+
+            visited[i] = true;
+            int occupant = _satisfiedBy[i];
+
+            if (occupant == 0 || TryPlaceMoving(occupant, visited))
+            {
+                _satisfiedBy[i] = code;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool Accepts(int slot, int code) => Array.IndexOf(_requirements[slot], code) >= 0;
 
     private int FindSatisfiedSlot(int code) => Array.IndexOf(_satisfiedBy, code);
 

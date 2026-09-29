@@ -77,6 +77,17 @@ public class LogindStateTests
     }
 
     [Fact]
+    public void The_owner_of_the_session_is_read_from_the_real_output()
+    {
+        // What WSL answered on 2026-09-29 for its terminal session, asked
+        // with --property=User among the others: the uid comes first, as a
+        // number, followed by the user's name.
+        LogindState state = LogindState.Parse("User=0\nName=root\nSeat=\nRemote=no\nType=tty\nClass=user\nActive=yes\nLockedHint=no\n");
+
+        Assert.Equal(new LogindState(true, false, "tty", "", false, 0), state);
+    }
+
+    [Fact]
     public void Lines_that_are_not_properties_and_unknown_keys_are_skipped()
     {
         // A warning printed on the same stream, or a property added by a

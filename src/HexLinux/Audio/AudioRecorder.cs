@@ -67,6 +67,16 @@ public sealed class AudioRecorder : IDisposable
     /// <summary>Raised, on the capture thread, when the ceiling is reached; carries the recording's tag.</summary>
     public event EventHandler<int>? MaximumReached;
 
+    /// <summary>
+    /// Raised, on the capture thread, when the sound server stops delivering
+    /// in the middle of a recording — a server restarted, a headset
+    /// unplugged — carrying the recording's tag. The capture ends there, and
+    /// <see cref="StopAsync"/> still returns what was heard until then.
+    /// Without it, a dictation started by a command would stay "recording"
+    /// while nothing is captured any more.
+    /// </summary>
+    public event EventHandler<int>? CaptureLost;
+
     public bool IsRecording
     {
         get
@@ -231,7 +241,13 @@ public sealed class AudioRecorder : IDisposable
 
                 if (result < 0)
                 {
-                    // The server went away mid-recording: keep what was heard.
+                    // The server went away mid-recording: keep what was heard,
+                    // and say so, unless a stop was asked for meanwhile.
+                    if (!Stopping)
+                    {
+                        owner.CaptureLost?.Invoke(owner, Tag);
+                    }
+
                     break;
                 }
 

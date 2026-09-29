@@ -92,6 +92,47 @@ public class ControlPathsTests
     {
         Assert.Throws<ArgumentNullException>(() => ControlPaths.Folder(null!));
         Assert.Throws<ArgumentNullException>(() => ControlPaths.Fits(null!));
+        Assert.Throws<ArgumentNullException>(() => ControlPaths.LockFolders(null!));
+    }
+
+    [Fact]
+    public void The_lock_sits_with_the_socket_first()
+    {
+        // As before the lock stopped depending on the socket: an older
+        // daemon and a newer one still lock the same file.
+        AppPaths paths = Resolve("/run/user/1000", stateHome: null);
+
+        Assert.Equal(["/run/user/1000/hexlinux", "/home/ana/.local/state/hexlinux"], ControlPaths.LockFolders(paths));
+    }
+
+    [Fact]
+    public void A_path_too_long_for_any_socket_still_leaves_a_place_for_the_lock()
+    {
+        // RV-10: with no folder short enough for a socket, the daemon used to
+        // run without its single-instance lock — two daemons, and every
+        // dictation inserted twice. A lock file has no length limit.
+        string deep = "/" + new string('r', 120);
+        AppPaths paths = AppPaths.Resolve(
+            variable => variable switch
+            {
+                "XDG_RUNTIME_DIR" => deep,
+                "XDG_STATE_HOME" => deep + "/state",
+                _ => null,
+            },
+            Home);
+
+        Assert.Null(ControlPaths.Folder(paths));
+        Assert.Equal([deep + "/hexlinux", deep + "/state/hexlinux"], ControlPaths.LockFolders(paths));
+    }
+
+    [Fact]
+    public void Without_a_runtime_folder_the_lock_has_one_place_listed_once()
+    {
+        // The runtime folder falls back to the state folder: the same folder
+        // is not tried twice.
+        AppPaths paths = Resolve(runtime: null, stateHome: null);
+
+        Assert.Equal(["/home/ana/.local/state/hexlinux"], ControlPaths.LockFolders(paths));
     }
 
     private static AppPaths Resolve(string? runtime, string? stateHome) =>

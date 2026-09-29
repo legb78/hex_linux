@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace HexLinux.Session;
 
 /// <summary>
@@ -18,7 +20,8 @@ namespace HexLinux.Session;
 /// <param name="Type">"x11", "wayland", "tty"…</param>
 /// <param name="Seat">"seat0", or empty for a session attached to no seat.</param>
 /// <param name="Remote">True for a session opened from the network.</param>
-public readonly record struct LogindState(bool? Active, bool? Locked, string Type = "", string Seat = "", bool? Remote = null)
+/// <param name="User">The uid the session belongs to, when reported.</param>
+public readonly record struct LogindState(bool? Active, bool? Locked, string Type = "", string Seat = "", bool? Remote = null, uint? User = null)
 {
     public static readonly LogindState Unknown = new(null, null);
 
@@ -50,6 +53,7 @@ public readonly record struct LogindState(bool? Active, bool? Locked, string Typ
         bool? active = null;
         bool? locked = null;
         bool? remote = null;
+        uint? user = null;
         string type = string.Empty;
         string seat = string.Empty;
 
@@ -82,12 +86,15 @@ public readonly record struct LogindState(bool? Active, bool? Locked, string Typ
                 case "Seat":
                     seat = value;
                     break;
+                case "User":
+                    user = uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out uint uid) ? uid : null;
+                    break;
                 default:
                     break;
             }
         }
 
-        return new LogindState(active, locked, type, seat, remote);
+        return new LogindState(active, locked, type, seat, remote, user);
     }
 
     /// <summary>
@@ -161,22 +168,49 @@ public readonly record struct GuardDecision(bool Allowed, string Reason, bool Lo
 /// a service, whose own session is seatless and so always "active" — the
 /// graphical session logind attributes to the user.</para>
 ///
+/// <para><b>And when even that one sits at no seat</b> — the user has no
+/// graphical session, only an SSH login or a terminal — it says nothing of the
+/// screen either: logind elects any started session as the display, and a
+/// seatless one is active for ever. The main seat is asked who is in front of
+/// it. Nobody (WSL, a machine with no screen): nothing to protect, the
+/// dictation goes on. One of this user's sessions: that one decides. Anybody
+/// else's: this user is not in front — refused, and the keyboards
+/// closed.</para>
+///
 /// <para>Pure: loginctl is reached through the functions passed in.</para>
 /// </summary>
 public static class SessionGuardPolicy
 {
+    /// <param name="logindPresent">logind runs on this machine.</param>
+    /// <param name="loginctlFound">loginctl was found to ask it.</param>
+    /// <param name="uid">The user the daemon runs as.</param>
+    /// <param name="xdgSessionId">The session named by the environment, if any.</param>
+    /// <param name="showSession"><c>loginctl show-session ID</c>, with the properties of <c>ToolCommands.ShowSession</c>.</param>
+    /// <param name="showUserDisplay"><c>loginctl show-user UID --property=Display --value</c>.</param>
+    /// <param name="showSeatActiveSession"><c>loginctl show-seat seat0 --property=ActiveSession --value</c>.</param>
     public static GuardDecision Decide(
         bool logindPresent,
+        bool loginctlFound,
+        uint uid,
         string? xdgSessionId,
         Func<string, LoginctlAnswer> showSession,
-        Func<LoginctlAnswer> showUserDisplay)
+        Func<LoginctlAnswer> showUserDisplay,
+        Func<LoginctlAnswer> showSeatActiveSession)
     {
         ArgumentNullException.ThrowIfNull(showSession);
         ArgumentNullException.ThrowIfNull(showUserDisplay);
+        ArgumentNullException.ThrowIfNull(showSeatActiveSession);
 
         if (!logindPresent)
         {
             return new GuardDecision(true, "no logind on this system: there is no session to protect", false);
+        }
+
+        if (!loginctlFound)
+        {
+            // logind runs, so there is a seat and possibly a lock to respect:
+            // not being able to ask is not the same as having nothing to ask.
+            return new GuardDecision(false, "logind runs but loginctl cannot be found: refused to be safe", true);
         }
 
         string? id = xdgSessionId?.Trim();
@@ -214,7 +248,70 @@ public static class SessionGuardPolicy
 
         LoginctlAnswer answer = showSession(displayId);
 
-        return answer.Succeeded ? FromState(displayId, LogindState.Parse(answer.Output)) : Unanswered($"session {displayId}");
+        if (!answer.Succeeded)
+        {
+            return Unanswered($"session {displayId}");
+        }
+
+        LogindState displayState = LogindState.Parse(answer.Output);
+
+        return displayState.IsLocalGraphical
+            ? FromState(displayId, displayState)
+            : FromSeat(uid, displayId, displayState, showSession, showSeatActiveSession);
+    }
+
+    /// <summary>
+    /// The user's display session sits at no seat: who sits at the main one
+    /// decides.
+    /// </summary>
+    private static GuardDecision FromSeat(
+        uint uid,
+        string displayId,
+        LogindState display,
+        Func<string, LoginctlAnswer> showSession,
+        Func<LoginctlAnswer> showSeatActiveSession)
+    {
+        LoginctlAnswer seat = showSeatActiveSession();
+
+        if (!seat.Succeeded)
+        {
+            return Unanswered("who is in front of the screen");
+        }
+
+        string activeId = seat.Output.Trim();
+
+        if (activeId.Length == 0 || activeId == displayId)
+        {
+            // Nobody at the seat — WSL, a machine with no screen — or the
+            // user's own session: the display session's state stands.
+            return FromState(displayId, display);
+        }
+
+        if (!LogindState.IsValidSessionId(activeId))
+        {
+            return new GuardDecision(false, "logind's answer about the seat could not be read: refused to be safe", true);
+        }
+
+        LoginctlAnswer active = showSession(activeId);
+
+        if (!active.Succeeded)
+        {
+            return Unanswered($"session {activeId}");
+        }
+
+        LogindState inFront = LogindState.Parse(active.Output);
+
+        if (inFront.User is null)
+        {
+            return new GuardDecision(false, $"logind's answer for session {activeId} could not be read: refused to be safe", true);
+        }
+
+        if (inFront.User == uid)
+        {
+            return FromState(activeId, inFront);
+        }
+
+        return new GuardDecision(false, $"another user's session ({activeId}) is in front of the screen", true, Inactive: true);
     }
 
     private static GuardDecision FromState(string id, LogindState state)

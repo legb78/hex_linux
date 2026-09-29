@@ -145,13 +145,13 @@ public class DoctorTests
 
     /// <summary>What the session guard concludes when loginctl answers <paramref name="showSession"/> for session 2.</summary>
     private static GuardDecision Logind(string showSession) =>
-        SessionGuardPolicy.Decide(true, "2", _ => new LoginctlAnswer(true, showSession), () => LoginctlAnswer.Failed);
+        SessionGuardPolicy.Decide(true, true, 1000, "2", _ => new LoginctlAnswer(true, showSession), () => LoginctlAnswer.Failed, () => LoginctlAnswer.Failed);
 
     private static GuardDecision LogindAbsent() =>
-        SessionGuardPolicy.Decide(false, null, _ => LoginctlAnswer.Failed, () => LoginctlAnswer.Failed);
+        SessionGuardPolicy.Decide(false, false, 1000, null, _ => LoginctlAnswer.Failed, () => LoginctlAnswer.Failed, () => LoginctlAnswer.Failed);
 
     private static GuardDecision LogindUnanswered() =>
-        SessionGuardPolicy.Decide(true, "2", _ => LoginctlAnswer.Failed, () => LoginctlAnswer.Failed);
+        SessionGuardPolicy.Decide(true, true, 1000, "2", _ => LoginctlAnswer.Failed, () => LoginctlAnswer.Failed, () => LoginctlAnswer.Failed);
 
     private static DoctorReport Evaluate(DoctorFacts facts) => DoctorEvaluation.Evaluate(facts);
 
@@ -478,7 +478,7 @@ public class DoctorTests
         Assert.Equal(
             "\"models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\" was found neither in the data folder nor next to the executable",
             model.Summary);
-        Assert.Equal("download it with scripts/get-model.sh", model.Hint);
+        Assert.Equal("download it with get-model.sh (next to hexlinux in the release, scripts/get-model.sh in a clone)", model.Hint);
         Assert.Equal(2, report.ExitCode);
         Assert.EndsWith("Something essential is missing (exit code 2).\n", report.Render(), StringComparison.Ordinal);
     }
@@ -498,7 +498,7 @@ public class DoctorTests
         DoctorCheck model = Only(report, "model");
         Assert.Equal(CheckStatus.Error, model.Status);
         Assert.Equal("incomplete: " + problems[0] + "; " + problems[1], model.Summary);
-        Assert.Equal("download it again with scripts/get-model.sh --force", model.Hint);
+        Assert.Equal("download it again with get-model.sh --force (next to hexlinux in the release, scripts/ in a clone)", model.Hint);
         Assert.Equal(2, report.ExitCode);
     }
 
@@ -879,7 +879,7 @@ public class DoctorTests
         // The doctor run from SSH with nobody logged in graphically: logind
         // knows no display session, and the guard would refuse every
         // insertion from here.
-        GuardDecision guard = SessionGuardPolicy.Decide(true, null, _ => LoginctlAnswer.Failed, () => new LoginctlAnswer(true, "\n"));
+        GuardDecision guard = SessionGuardPolicy.Decide(true, true, 1000, null, _ => LoginctlAnswer.Failed, () => new LoginctlAnswer(true, "\n"), () => LoginctlAnswer.Failed);
         DoctorReport report = Evaluate(X11Desktop() with { Guard = guard });
 
         Assert.Equal(CheckStatus.Error, Only(report, "logind").Status);

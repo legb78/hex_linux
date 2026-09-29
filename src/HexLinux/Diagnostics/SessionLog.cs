@@ -122,7 +122,13 @@ public sealed class SessionLog
         }
     }
 
-    /// <summary>Appends to a file created 0600 when it does not exist yet.</summary>
+    /// <summary>
+    /// Appends to a file created 0600 when it does not exist yet, and brought
+    /// back to 0600 when it does with a wider mode: the creation mode applies
+    /// to a new file only, and a log made earlier — by hand, by another
+    /// program, under an older version — kept being readable by others
+    /// (QA-08).
+    /// </summary>
     public static bool AppendPrivately(string path, string text)
     {
         try
@@ -135,6 +141,8 @@ public sealed class SessionLog
                 UnixCreateMode = PrivateFile,
             });
 
+            NarrowToPrivate(stream);
+
             byte[] bytes = Encoding.UTF8.GetBytes(text);
             stream.Write(bytes);
             return true;
@@ -143,6 +151,26 @@ public sealed class SessionLog
         {
             // Disk full or file locked: the dictation takes priority.
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Through the open handle, so it is the file being written that changes.
+    /// A file this user cannot change the mode of — someone else's — is still
+    /// written to if it may be: the line matters more than the mode.
+    /// </summary>
+    private static void NarrowToPrivate(FileStream stream)
+    {
+        try
+        {
+            if ((File.GetUnixFileMode(stream.SafeFileHandle) & ~PrivateFile) != 0)
+            {
+                File.SetUnixFileMode(stream.SafeFileHandle, PrivateFile);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Left as it was.
         }
     }
 

@@ -203,12 +203,27 @@ public static class CommandLine
                     sender = parsed;
                 }
 
+                // Refused like an unknown sender, not read as Paste: Type is
+                // what a user picks to keep the text out of the clipboard,
+                // and "--mode Typo" used to send it there (QA-10).
+                InsertionMode injectMode = InsertionMode.Paste;
+
+                if (options.GetValueOrDefault("--mode") is { } modeName)
+                {
+                    if (modeName.Equals("Type", StringComparison.OrdinalIgnoreCase))
+                    {
+                        injectMode = InsertionMode.Type;
+                    }
+                    else if (!modeName.Equals("Paste", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return Invalid($"Unknown mode: {modeName} (Paste or Type).");
+                    }
+                }
+
                 return new CliRequest(mode)
                 {
                     Text = value,
-                    InjectMode = string.Equals(options.GetValueOrDefault("--mode"), "Type", StringComparison.OrdinalIgnoreCase)
-                        ? InsertionMode.Type
-                        : InsertionMode.Paste,
+                    InjectMode = injectMode,
                     Delay = Positive(options, "--delay", DefaultDelay),
                     Sender = sender,
                 };
@@ -268,15 +283,16 @@ public static class CommandLine
               drive the running daemon through its control socket. Bind
               "hexlinux --toggle" to a desktop shortcut to dictate without any
               keyboard permission: press to start, press again to stop.
-              The daemon answers one line: "ok <state>", "ignored <state>" or
-              "error <word>", the state being loading, idle, recording,
-              transcribing or failed.
+              Prints the state reached (loading, idle, recording, transcribing
+              or failed), "ignored (<state>)" when the command means nothing in
+              that state, or "error: <word>".
 
           hexlinux --doctor
               check everything dictation needs and say what is missing
 
           hexlinux --transcribe file.wav [--model folder] [--provider cpu]
-              transcribe a 16 kHz mono WAV file and print the text and the time taken
+              transcribe a 16 kHz mono 16-bit WAV file (the header is checked
+              first) and print the text and the time taken
 
           hexlinux --record out.wav [--seconds 5]
               record the microphone, write the WAV and measure the level captured
@@ -301,9 +317,10 @@ public static class CommandLine
         Exit codes:
           0  success
           1  generic failure: bad arguments, daemon not running or already running,
-             recording too short
-          2  the model is missing or incomplete (run scripts/get-model.sh)
-          3  failure: microphone, transcription, or insertion impossible
+             recording too short, a file --transcribe cannot take
+          2  the model is missing or incomplete (run get-model.sh)
+          3  failure: microphone, tones, transcription or insertion impossible,
+             or a running daemon that did not answer
           4  the recording was silent
           5  no keyboard can be read: the shortcut is unavailable (see --doctor)
         """;

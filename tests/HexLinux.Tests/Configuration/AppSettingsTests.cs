@@ -141,6 +141,23 @@ public class AppSettingsTests : IDisposable
     }
 
     [Fact]
+    public void Half_an_escaped_emoji_in_a_key_costs_only_that_key()
+    {
+        // QA-02: "\ud83d" is what is left of an escaped emoji whose second
+        // half was deleted. In a key name it threw past Parse, and the daemon,
+        // --doctor and every other mode stopped at start with no trace.
+        AppSettings settings = AppSettings.Parse(
+            """{"\ud83d": 1, "threads": 2, "feedback": "\udc00", "hotkey": ["LeftAlt"]}""",
+            out IReadOnlyList<string> notes);
+
+        Assert.Equal(2, settings.Threads);
+        Assert.Equal(FeedbackMode.Sound, settings.Feedback);
+        Assert.Equal(["LeftAlt"], settings.Hotkey);
+        Assert.Contains(notes, note => note.Contains("lone surrogate", StringComparison.Ordinal));
+        Assert.Contains(notes, note => note.StartsWith("\"feedback\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void A_file_mixing_good_and_bad_values_keeps_every_good_one_and_reports_every_bad_one()
     {
         // A file edited by hand over months: half the values fine, the rest

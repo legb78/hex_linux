@@ -150,4 +150,40 @@ public class ClipboardFormatsTests
         // every dictation — the log says so.
         Assert.Equal(32 * 1024 * 1024, ClipboardFormats.MaxSnapshotBytes);
     }
+
+    [Fact]
+    public void A_password_copied_from_a_password_manager_is_recognised_as_a_secret()
+    {
+        // SEC-01: the targets KeePassXC offers for a copied password, as
+        // xclip lists them. Restored, the password would come back without
+        // the mark and land in Klipper's or CopyQ's history.
+        IReadOnlyList<string> offered = ClipboardFormats.ParseList("TARGETS\nUTF8_STRING\nx-kde-passwordManagerHint\n");
+
+        Assert.True(ClipboardFormats.IsMarkedSecret(offered));
+    }
+
+    [Theory]
+    [InlineData("X-KDE-PASSWORDMANAGERHINT")]
+    [InlineData("  x-kde-passwordManagerHint  ")]
+    public void The_secret_mark_is_recognised_however_it_is_written(string mark)
+    {
+        // wl-paste and xclip print the names as the owner gave them.
+        Assert.True(ClipboardFormats.IsMarkedSecret(["text/plain", mark]));
+    }
+
+    [Fact]
+    public void An_ordinary_copy_is_no_secret()
+    {
+        // Text, an image, a file list: saved and restored as before.
+        Assert.False(ClipboardFormats.IsMarkedSecret(["TARGETS", "UTF8_STRING", "image/png", "text/uri-list"]));
+        Assert.False(ClipboardFormats.IsMarkedSecret([]));
+    }
+
+    [Fact]
+    public void The_secret_mark_itself_is_never_what_gets_saved()
+    {
+        // It holds the word "secret", not the password.
+        Assert.Equal("UTF8_STRING", ClipboardFormats.Preferred(["x-kde-passwordManagerHint", "UTF8_STRING"]));
+        Assert.Null(ClipboardFormats.Preferred(["x-kde-passwordManagerHint"]));
+    }
 }

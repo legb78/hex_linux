@@ -149,14 +149,25 @@ public static class ToolCommands
     /// <summary>
     /// The properties the session guard decides on. Type, Seat and Remote
     /// tell a graphical session at a seat from an SSH login, which logind
-    /// always reports as active.
+    /// always reports as active; User tells whose session it is (printed as
+    /// the numeric uid: <c>User=0</c>, verified with systemd 255).
     /// </summary>
     public static ToolCommand ShowSession(string sessionId) => new(
         ToolLocator.Loginctl,
-        ["show-session", sessionId, "--property=Active", "--property=LockedHint", "--property=Type", "--property=Seat", "--property=Remote"]);
+        ["show-session", sessionId, "--property=Active", "--property=LockedHint", "--property=Type", "--property=Seat", "--property=Remote", "--property=User"]);
 
     /// <summary>The graphical session logind attributes to the user, as a bare id.</summary>
     public static ToolCommand ShowUserDisplay(uint uid) => new(
         ToolLocator.Loginctl,
         ["show-user", uid.ToString(CultureInfo.InvariantCulture), "--property=Display", "--value"]);
+
+    /// <summary>
+    /// The session in front of the main seat, as a bare id — empty when
+    /// nobody sits at it (verified under WSL: <c>ActiveSession=</c>, exit
+    /// code 0). Asked when the user's own session is attached to no seat and
+    /// so says nothing about the screen.
+    /// </summary>
+    public static ToolCommand ShowSeatActiveSession() => new(
+        ToolLocator.Loginctl,
+        ["show-seat", "seat0", "--property=ActiveSession", "--value"]);
 }

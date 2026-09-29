@@ -12,6 +12,9 @@
 - [ ] `dotnet build -c Release` — 0 warnings
 - [ ] `dotnet format --verify-no-changes` — clean
 - [ ] `dotnet test` — green
+- [ ] Changes to `.github/`, `scripts/`, `packaging/`, a `.csproj` or
+      `Directory.Build.props` read line by line — a pull request runs its own
+      workflow, so a green check cannot vouch for them
 - [ ] Manual check (fill in the table below if this touches the keyboard, the
       microphone, text insertion, the clipboard, the tray or the notifications
       — those layers cannot be tested automatically, and the keyboard cannot be

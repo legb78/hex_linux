@@ -95,15 +95,15 @@ public class InsertionTextTests
     }
 
     [Theory]
-    [InlineData('‪')] // LRE
-    [InlineData('‫')] // RLE
-    [InlineData('‬')] // PDF
-    [InlineData('‭')] // LRO
-    [InlineData('‮')] // RLO
-    [InlineData('⁦')] // LRI
-    [InlineData('⁧')] // RLI
-    [InlineData('⁨')] // FSI
-    [InlineData('⁩')] // PDI
+    [InlineData('\u202A')] // LRE
+    [InlineData('\u202B')] // RLE
+    [InlineData('\u202C')] // PDF
+    [InlineData('\u202D')] // LRO
+    [InlineData('\u202E')] // RLO
+    [InlineData('\u2066')] // LRI
+    [InlineData('\u2067')] // RLI
+    [InlineData('\u2068')] // FSI
+    [InlineData('\u2069')] // PDI
     public void Bidirectional_embeddings_overrides_and_isolates_are_removed(char bidi)
     {
         Assert.Equal("abc", InsertionText.Sanitize($"a{bidi}b{bidi}c"));
@@ -114,7 +114,7 @@ public class InsertionTextTests
     {
         // The CVE-2021-42574 pattern: an override hides part of the text
         // inside what looks like a comment.
-        string sanitized = InsertionText.Sanitize("access = \"user‮ ⁦// admin⁩ ⁦\"");
+        string sanitized = InsertionText.Sanitize("access = \"user\u202E \u2066// admin\u2069 \u2066\"");
 
         Assert.Equal("access = \"user // admin \"", sanitized);
     }
@@ -150,7 +150,7 @@ public class InsertionTextTests
     [Fact]
     public void Removal_happens_everywhere_in_a_long_text()
     {
-        string text = string.Concat(Enumerable.Repeat("a\u001b‮", 1000));
+        string text = string.Concat(Enumerable.Repeat("a\u001b\u202E", 1000));
 
         Assert.Equal(new string('a', 1000), InsertionText.Sanitize(text));
     }
@@ -166,13 +166,13 @@ public class InsertionTextTests
     {
         // An override or a line break at the edges would otherwise leave a
         // stray space at the start of the insertion.
-        Assert.Equal("hello", InsertionText.Sanitize("‮  hello \n"));
+        Assert.Equal("hello", InsertionText.Sanitize("\u202E  hello \n"));
     }
 
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("\u001b\u0007‮⁩\r\n")]
+    [InlineData("\u001b\u0007\u202E\u2069\r\n")]
     public void Nothing_printable_gives_an_empty_string(string text)
     {
         Assert.Equal(string.Empty, InsertionText.Sanitize(text));
@@ -206,7 +206,7 @@ public class InsertionTextTests
     [Fact]
     public void A_segment_is_sanitized_before_the_space_is_added()
     {
-        Assert.Equal(" Next.", InsertionText.ForSegment("‮ Next.\n", 2));
+        Assert.Equal(" Next.", InsertionText.ForSegment("\u202E Next.\n", 2));
     }
 
     [Theory]
@@ -215,6 +215,6 @@ public class InsertionTextTests
     public void A_segment_with_nothing_printable_inserts_nothing_not_even_a_space(int ordinal)
     {
         // A pause transcribed as noise must not leave a lone space behind.
-        Assert.Equal(string.Empty, InsertionText.ForSegment("\u0007 ‮", ordinal));
+        Assert.Equal(string.Empty, InsertionText.ForSegment("\u0007 \u202E", ordinal));
     }
 }

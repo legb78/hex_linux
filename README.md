@@ -76,8 +76,14 @@ To start HexLinux with your session:
 ./hexlinux --autostart on       # --autostart off removes it
 ```
 
-The entry points at the executable where it stands: move the folder, and run
-`--autostart on` again from the new place. Sway and Hyprland do not read
+The entry points at the executable where it stands. Move the folder and run
+`--autostart on` again from the new place — or just start HexLinux from there
+once: an entry whose executable is gone is pointed at the running one, while an
+entry that still starts a working copy is left alone. Autostart is refused for
+a build made with `dotnet build` (it needs the .NET SDK's runtime, which a login
+session does not find: use the release or `scripts/publish.sh`), for a folder
+whose path holds a `%` (GNOME cannot start it), and for a binary another user
+could replace. Sway and Hyprland do not read
 `~/.config/autostart`: start it from their configuration instead
 (`exec /path/to/hexlinux` for Sway, `exec-once = /path/to/hexlinux` for
 Hyprland).
@@ -102,7 +108,9 @@ dotnet build -c Release
 ```
 
 The scripts the release carries at its root are under `scripts/` in a clone:
-`sudo scripts/install-udev-rules.sh` below, for instance.
+`sudo scripts/install-udev-rules.sh` below, for instance. For
+`--autostart on`, use what `scripts/publish.sh` builds: the output of
+`dotnet build` only runs where `DOTNET_ROOT` points at the SDK.
 
 ## Using it
 
@@ -129,11 +137,14 @@ any of your programs type anywhere, the lock screen and a root terminal
 included. That is the price of hold-to-talk on Linux. The other usual way, the
 `input` group, is broader still — every input device, in every session, even
 another user's — and HexLinux never adds anyone to it.
-[SECURITY.md](SECURITY.md) spells it out.
+[SECURITY.md](SECURITY.md) spells it out. The installer runs as root: check
+the archive with `sha256sum -c SHA256SUMS` before you run it.
 
 HexLinux itself only observes the keys: it never grabs a keyboard, so every key
-still reaches your desktop, and it looks at nothing but the keys of its
-shortcut.
+still reaches your desktop. Every key of the keyboards it listens to is
+compared, in memory, with the shortcut — another key cancels a dictation being
+held, and held modifiers are tracked so that the paste can wait for them to be
+let go. None is stored or logged.
 
 ### Pressing a shortcut: no permission at all
 
@@ -187,7 +198,7 @@ shows the state:
 | Blue | Ready |
 | Red | Recording |
 | Orange | Transcribing |
-| Crossed grey | Model not found |
+| Crossed grey | Model unusable: it could not be loaded |
 
 Its menu dictates, opens the settings file and the log folder, switches the
 tones and the start at login, and quits. Failures that need you — model
@@ -195,10 +206,17 @@ missing, microphone missing, text that could not be inserted, a locked
 screen — arrive as desktop notifications. Where there is no tray, HexLinux
 runs all the same.
 
+A model missing altogether stops HexLinux at start, with exit code 2 and a
+notification naming `get-model.sh`, before any icon appears.
+
 For long dictations, turn on `segmentation`: each pause in your speech then
 closes a piece, transcribed and inserted while you keep talking, instead of
 everything arriving at release. A dictation cancelled halfway — another key
-pressed while the shortcut is held — keeps the pieces already inserted.
+pressed while the shortcut is held — keeps the pieces already inserted. Once
+the shortcut is released, its keys go back to their ordinary uses: a Right
+`Ctrl`+`C` typed while the dictation is transcribed copies, and cancels
+nothing. The shortcut never ends or cancels a dictation started from
+`--toggle` or the tray either; `hexlinux --cancel` does, at any point.
 
 ## Settings
 
@@ -255,7 +273,8 @@ guessing.
 # 1. Is the microphone picking anything up?
 ./hexlinux --record test.wav            # --seconds 5 by default
 
-# 2. Does the engine transcribe that file?
+# 2. Does the engine transcribe that file? (16 kHz mono 16-bit WAV, as --record
+#    writes; any other format is named and refused)
 ./hexlinux --transcribe test.wav
 
 # 3. Does the hotkey fire?
@@ -272,9 +291,15 @@ A text given to `--inject` on the command line is visible to every user of
 the machine while it runs; `--inject -` reads it from standard input instead.
 Test with text that is not a secret either way.
 
-`hexlinux --status` asks the running daemon what it is doing. The daemon
-answers one line — `ok <state>`, `ignored <state>` or `error <word>` — the state
-being `loading`, `idle`, `recording`, `transcribing` or `failed`.
+`hexlinux --status` asks the running daemon what it is doing, and prints the
+state: `loading`, `idle`, `recording`, `transcribing` or `failed`. The other
+control commands print the state they led to, `ignored (<state>)` when they
+mean nothing in that state (a `--start` during a transcription), or
+`error: <word>` — `error: busy` when the daemon could not act within a few
+seconds. `HexLinux is not running.` (exit code 1) means that nothing listens;
+a daemon that is there but does not answer in time gets its own message and
+exit code 3. On the socket itself, the daemon answers one line: `ok <state>`,
+`ignored <state>` or `error <word>`.
 
 Start with the first. A muted microphone produces a perfectly valid file of the
 right duration that is completely silent — and the engine may then invent a
@@ -290,9 +315,9 @@ whether the text made it out.
 | Exit code | Meaning |
 |-----------|---------|
 | 0 | Success |
-| 1 | Generic failure: bad arguments, daemon not running or already running, recording too short |
+| 1 | Generic failure: bad arguments, daemon not running or already running, recording too short, a file `--transcribe` cannot take |
 | 2 | The model is missing or incomplete (run `get-model.sh`) |
-| 3 | Failure: microphone, transcription, or insertion impossible |
+| 3 | Failure: microphone, tones, transcription or insertion impossible, or a running daemon that did not answer |
 | 4 | The recording was silent |
 | 5 | No keyboard can be read: the shortcut is unavailable (see `--doctor`) |
 
@@ -315,9 +340,21 @@ whether the text made it out.
   also keeps its history from one session to the next and refuses an empty
   clipboard, which undoes the clearing HexLinux does when it had nothing to
   restore. Type mode leaves the clipboard alone.
+- **One clipboard format comes back**: the tools restore a single format, so
+  a copy offered in several comes back in one of them — plain text first,
+  then an image, then a file list; rich text returns as plain text. A password
+  copied from a password manager that marks it as a secret (KeePassXC) is
+  cleared after the paste rather than restored, so that no history records it
+  without its mark.
+- **The text goes to the window focused at insertion time.** HexWin brought
+  back the window that had the focus when the dictation started; HexLinux
+  cannot under Wayland, and does not under X11 yet. With `segmentation`, or
+  when the model reloads after five idle minutes (two or three seconds), keep
+  the focus where the text should land.
 - **Screen lock**: HexLinux refuses to insert into a locked or inactive session,
-  but it learns about the lock from logind, and only lockers that tell logind
-  can be seen — GNOME's and KDE's do; swaylock and hyprlock do not.
+  and stops a dictation when the session locks, but it learns about the lock
+  from logind, and only lockers that tell logind can be seen — GNOME's and
+  KDE's do; swaylock and hyprlock do not.
 - **No keyboard without a right `Ctrl`**: some laptops and Apple keyboards lack
   one. Pick another key with `--watch-hotkey`.
 - **No on-screen circle**, unlike HexWin: a Wayland window cannot place itself
@@ -362,7 +399,7 @@ flowchart LR
     tray["TraySurface<br/>tray and notifications, D-Bus"]
   end
   subgraph pure["Pure logic: every decision, unit-tested"]
-    chord["ChordDetector"]
+    chord["ChordDetector<br/>ChordCommands"]
     commands["ControlCommands"]
     coordinator["DictationCoordinator"]
     guards["RecordingGuards<br/>SpeechSegmenter"]

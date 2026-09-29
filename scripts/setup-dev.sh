@@ -90,7 +90,9 @@ else
   installer="$(mktemp)"
   trap 'rm -f "$installer"' EXIT
 
-  curl --fail --silent --show-error --location https://dot.net/v1/dotnet-install.sh --output "$installer"
+  # HTTPS only, redirects included: curl would otherwise follow one to plain
+  # HTTP, and the script it fetches runs right after.
+  curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' https://dot.net/v1/dotnet-install.sh --output "$installer"
   bash "$installer" --channel "$channel" --install-dir "$install_dir"
 fi
 

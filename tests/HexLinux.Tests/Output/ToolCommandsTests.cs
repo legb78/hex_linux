@@ -54,6 +54,7 @@ public class ToolCommandsTests
         yield return ToolCommands.WtypeProbe();
         yield return ToolCommands.ShowSession("2");
         yield return ToolCommands.ShowUserDisplay(1000);
+        yield return ToolCommands.ShowSeatActiveSession();
     }
 
     // --- Privacy ------------------------------------------------------------------
@@ -313,7 +314,16 @@ public class ToolCommandsTests
             "--property=LockedHint",
             "--property=Type",
             "--property=Seat",
-            "--property=Remote");
+            "--property=Remote",
+            "--property=User");
+    }
+
+    [Fact]
+    public void The_session_in_front_of_the_seat_is_asked_for_as_a_bare_value()
+    {
+        // SEC-03: when the user's own session is seatless (SSH, a tty), who
+        // sits at the screen decides; an empty answer means nobody does.
+        AssertCommand(ToolCommands.ShowSeatActiveSession(), ToolLocator.Loginctl, "show-seat", "seat0", "--property=ActiveSession", "--value");
     }
 
     [Fact]

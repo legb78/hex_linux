@@ -24,6 +24,17 @@ public readonly record struct TranscriptionResult(string Text, TimeSpan Duration
 [ExcludeFromCodeCoverage(Justification = "Covered by the integration tests, which load the native engine and are excluded from CI.")]
 public sealed class ParakeetEngine : IDisposable
 {
+    /// <summary>
+    /// Fewer samples than this — a tenth of a second — are not handed to the
+    /// engine, and give an empty result. A tenth of a second holds no word;
+    /// and on an input too short to make a single feature frame, ONNX Runtime
+    /// aborts the whole process instead of failing the call (verified with 0
+    /// and 1 sample: "Invalid input shape: {0,128}", SIGABRT; 160 samples
+    /// passed). The daemon never sends that little, but <c>--transcribe</c>
+    /// reads whatever file it is given.
+    /// </summary>
+    public const int MinimumSamples = RecordingFormat.SampleRate / 10;
+
     private const int FeatureDimension = 80;
 
     private readonly OfflineRecognizer _recognizer;
@@ -60,7 +71,7 @@ public sealed class ParakeetEngine : IDisposable
         {
             throw new FileNotFoundException(
                 $"The model is incomplete: {string.Join("; ", problems)}. "
-                + "Run scripts/get-model.sh to download it again.",
+                + "Run get-model.sh (scripts/get-model.sh in a clone) to download it again.",
                 Path.Combine(modelDirectory, ModelFiles.Encoder));
         }
     }
@@ -142,6 +153,11 @@ public sealed class ParakeetEngine : IDisposable
 
     private TranscriptionResult Decode(float[] samples)
     {
+        if (samples.Length < MinimumSamples)
+        {
+            return new TranscriptionResult(string.Empty, TimeSpan.Zero);
+        }
+
         long startedAt = Stopwatch.GetTimestamp();
 
         using OfflineStream stream = _recognizer.CreateStream();

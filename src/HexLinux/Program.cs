@@ -34,6 +34,15 @@ internal static class Program
     private const int Silent = 4;
     private const int NoKeyboard = 5;
 
+    /// <summary>
+    /// Where the model script is: at the root of the release archive, under
+    /// <c>scripts/</c> in a clone — both said, since the user may have either.
+    /// </summary>
+    private const string GetModelHint = "get-model.sh (next to hexlinux in the release, scripts/get-model.sh in a clone)";
+
+    /// <summary>How long a session check made before an insertion stays good for its keystroke.</summary>
+    private static readonly TimeSpan GuardFreshness = TimeSpan.FromMilliseconds(500);
+
     private static int Main(string[] args)
     {
         CliRequest request = CommandLine.Parse(args);
@@ -91,6 +100,11 @@ internal static class Program
     private static int RunDaemon()
     {
         AppPaths paths = AppPaths.FromEnvironment();
+
+        // Before anything else, reading the settings included: a failure
+        // there once stopped the daemon with no trace at all (QA-02).
+        AppDomain.CurrentDomain.UnhandledException += (_, e) => SessionLog.WriteCrash(paths, (Exception)e.ExceptionObject);
+
         List<string> early = [];
         AppSettings settings = SettingsStore.Load(paths, early.Add, out IReadOnlyList<string> notes);
         SessionLog log = SessionLog.Create(settings.LogEnabled, paths);
@@ -100,7 +114,6 @@ internal static class Program
             log.Write(line);
         }
 
-        AppDomain.CurrentDomain.UnhandledException += (_, e) => SessionLog.WriteCrash(paths, (Exception)e.ExceptionObject);
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
             log.Write($"internal error: {e.Exception.GetBaseException().GetType().Name}: {e.Exception.GetBaseException().Message}");
@@ -128,12 +141,12 @@ internal static class Program
 
         if (modelPath is null)
         {
-            string message = $"Model not found: {settings.ModelPath}. Download it with scripts/get-model.sh, then start HexLinux again.";
+            string message = $"Model not found: {settings.ModelPath}. Download it with {GetModelHint}, then start HexLinux again.";
             Console.Error.WriteLine(message);
             log.Write(message);
 
             using IStatusSurface notifier = CreateSurface(log);
-            notifier.Notify("Model not found", "Download it with scripts/get-model.sh, then start HexLinux again.");
+            notifier.Notify("Model not found", $"Download it with {GetModelHint}, then start HexLinux again.");
             return ModelMissing;
         }
 
@@ -143,16 +156,17 @@ internal static class Program
             SessionLog.WriteCrash(paths, error);
         });
 
+        DictationDaemon? daemon = null;
+
         // Registered before the control socket exists: a signal that comes
         // as soon as the socket is seen (a script waiting for it, a session
         // closing during start-up) must end the loop, not kill the process
         // with the socket file left behind. Completing the loop before it
-        // runs makes Run return at once.
-        using PosixSignalRegistration interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, context => Stop(context, loop, log));
-        using PosixSignalRegistration terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => Stop(context, loop, log));
-        using PosixSignalRegistration hangUp = PosixSignalRegistration.Create(PosixSignal.SIGHUP, context => Stop(context, loop, log));
-
-        DictationDaemon? daemon = null;
+        // runs makes Run return at once. Once the daemon runs, it is asked to
+        // stop instead: it lets the work under way end first.
+        using PosixSignalRegistration interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, context => Stop(context, loop, Volatile.Read(ref daemon), log));
+        using PosixSignalRegistration terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, context => Stop(context, loop, Volatile.Read(ref daemon), log));
+        using PosixSignalRegistration hangUp = PosixSignalRegistration.Create(PosixSignal.SIGHUP, context => Stop(context, loop, Volatile.Read(ref daemon), log));
 
         using ControlServer? control = ControlServer.TryStart(
             paths,
@@ -177,9 +191,11 @@ internal static class Program
         using IStatusSurface surface = CreateSurface(log);
 
         SynchronizationContext.SetSynchronizationContext(loop);
-        daemon = new DictationDaemon(loop, paths, settings, log, modelPath, surface);
 
-        daemon.Start();
+        var dictation = new DictationDaemon(loop, paths, settings, log, modelPath, surface);
+        Volatile.Write(ref daemon, dictation);
+
+        dictation.Start();
 
         if (control.SocketPath is { } socket)
         {
@@ -188,7 +204,9 @@ internal static class Program
 
         loop.Run();
 
-        daemon.Dispose();
+        // Waits, a few seconds at most, for native work still under way: the
+        // engine freed under a running decode crashed the process (QA-01).
+        dictation.Dispose();
         log.Write("stopped");
         return Success;
     }
@@ -206,24 +224,42 @@ internal static class Program
         }
     }
 
-    /// <summary>A signal ends the loop cleanly instead of killing the process mid-dictation.</summary>
-    private static void Stop(PosixSignalContext context, SerialContext loop, SessionLog log)
+    /// <summary>
+    /// A signal ends the loop cleanly instead of killing the process
+    /// mid-dictation: the daemon, once running, finishes what is under way
+    /// first (a second signal does not wait).
+    /// </summary>
+    private static void Stop(PosixSignalContext context, SerialContext loop, DictationDaemon? daemon, SessionLog log)
     {
         context.Cancel = true;
         log.Write($"stopping ({context.Signal})");
-        loop.Complete();
+
+        if (daemon is null)
+        {
+            loop.Complete();
+        }
+        else
+        {
+            daemon.RequestStop();
+        }
     }
 
     // --- Control commands -------------------------------------------------------
 
     private static int SendControl(ControlCommand command)
     {
-        string? line = ControlClient.Send(AppPaths.FromEnvironment(), command);
+        ControlResponse response = ControlClient.Send(AppPaths.FromEnvironment(), command);
 
-        if (line is null)
+        if (response.Delivery == ControlDelivery.NotRunning)
         {
             Console.Error.WriteLine("HexLinux is not running.");
             return Failure;
+        }
+
+        if (response is not { Delivery: ControlDelivery.Answered, Line: { } line })
+        {
+            Console.Error.WriteLine("HexLinux is running but did not answer within 10 s (busy opening the microphone or loading the model?). Try hexlinux --status again.");
+            return Broken;
         }
 
         if (!ControlReply.TryParse(line, out ControlReply reply))
@@ -340,6 +376,34 @@ internal static class Program
             return Failure;
         }
 
+        byte[] file;
+
+        try
+        {
+            file = File.ReadAllBytes(wavPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine($"Cannot read {wavPath}: {ex.Message}");
+            return Failure;
+        }
+
+        // Checked before the engine sees it: the engine takes any bytes as
+        // 16 kHz mono PCM, and aborts the process on a file with no sample.
+        if (WavFile.TryReadFormat(file, out WavFormat format) is { } notWav)
+        {
+            Console.Error.WriteLine($"{wavPath}: {notWav}.");
+            return Failure;
+        }
+
+        if (format.Mismatch() is { } mismatch)
+        {
+            Console.Error.WriteLine($"{wavPath}: {mismatch}.");
+            Console.Error.WriteLine("The engine takes 16 kHz mono 16-bit PCM, which hexlinux --record writes. To convert a file:");
+            Console.Error.WriteLine("  ffmpeg -i in.wav -ar 16000 -ac 1 -c:a pcm_s16le out.wav");
+            return Failure;
+        }
+
         AppPaths paths = AppPaths.FromEnvironment();
         AppSettings settings = LoadSettings(paths, out _);
 
@@ -361,7 +425,7 @@ internal static class Program
         if (modelPath is null)
         {
             Console.Error.WriteLine($"Model not found: {settings.ModelPath}");
-            Console.Error.WriteLine("Download it with: scripts/get-model.sh");
+            Console.Error.WriteLine($"Download it with {GetModelHint}.");
             return ModelMissing;
         }
 
@@ -369,13 +433,16 @@ internal static class Program
         {
             Console.WriteLine($"Model    : {Path.GetFileName(modelPath)}");
             Console.WriteLine($"Compute  : {settings.Provider}, {settings.Threads} threads");
+            Console.WriteLine($"Audio    : {RecordingFormat.DurationOf(format.DataLength).TotalSeconds:F2} s");
             Console.WriteLine("Loading the model...");
 
             using ParakeetEngine engine = ParakeetEngine.Load(modelPath, settings.Provider, settings.Threads, settings.FrenchSpacing);
 
             Console.WriteLine();
 
-            using FileStream wav = File.OpenRead(wavPath);
+            // Rebuilt with the canonical header the engine reads: whatever
+            // chunks the file had before its samples are left out.
+            using var wav = new MemoryStream(WavFile.Create(file.AsSpan(format.DataOffset, format.DataLength)));
             TranscriptionResult result = engine.TranscribeAsync(wav).GetAwaiter().GetResult();
 
             Console.WriteLine(result.Text.Length > 0 ? result.Text : "(nothing usable)");
@@ -515,7 +582,8 @@ internal static class Program
 
         Console.WriteLine();
 
-        GuardDecision guard = new SessionGuard(tools).Check();
+        var sessionGuard = new SessionGuard(tools);
+        GuardDecision guard = sessionGuard.Check();
 
         if (!guard.Allowed)
         {
@@ -523,7 +591,10 @@ internal static class Program
             return Broken;
         }
 
-        InsertionResult result = injector.InsertAsync(InsertionText.Sanitize(text), plan, settings.PasteShortcut, tools).GetAwaiter().GetResult();
+        InsertionResult result = injector
+            .InsertAsync(InsertionText.Sanitize(text), plan, settings.PasteShortcut, tools, sessionGuard.RefusalAfter(GuardFreshness))
+            .GetAwaiter()
+            .GetResult();
 
         switch (result.Status)
         {
@@ -568,15 +639,31 @@ internal static class Program
             (DictationState.Idle, "back to idle", 300),
         ];
 
+        string? failure = null;
+
         foreach ((DictationState state, string label, int hold) in script)
         {
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}]  {label}");
-            Task playing = tones.PlayAsync(policy.Next(state));
+            Task<string?> playing = tones.PlayAsync(policy.Next(state));
             Thread.Sleep(hold);
-            playing.Wait(TimeSpan.FromSeconds(2));
+
+            // The daemon shrugs a missing tone off; this mode exists to find
+            // out why there is none, so it says so (RV-04).
+            if (playing.Wait(TimeSpan.FromSeconds(2)) && playing.Result is { } problem)
+            {
+                failure ??= problem;
+            }
         }
 
         Console.WriteLine();
+
+        if (failure is not null)
+        {
+            Console.Error.WriteLine($"No tone could be played: {failure}");
+            Console.Error.WriteLine("Check that a sound server runs (pactl info) and which output is the default one.");
+            return Broken;
+        }
+
         Console.WriteLine("Done.");
         return Success;
     }

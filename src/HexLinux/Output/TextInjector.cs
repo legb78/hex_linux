@@ -14,6 +14,12 @@ public enum InsertionStatus
     CopiedOnly,
 
     Failed,
+
+    /// <summary>
+    /// Held back at the last moment: the session locked, or went to the
+    /// background, while the clipboard was being prepared.
+    /// </summary>
+    Refused,
 }
 
 /// <summary>The outcome of one insertion, with a reason when it did not work; never the text.</summary>
@@ -107,11 +113,22 @@ public sealed class TextInjector
     }
 
     /// <summary>Carries out <paramref name="plan"/> for <paramref name="text"/>.</summary>
+    /// <param name="text">What to insert.</param>
+    /// <param name="plan">How, from <see cref="InjectionPlanner"/>.</param>
+    /// <param name="shortcut">The paste keystroke.</param>
+    /// <param name="tools">Tool names and their full paths.</param>
+    /// <param name="sessionRefusal">
+    /// Asked just before a key is sent or the clipboard is left filled: null
+    /// to go on, or why not. The session was checked before the insertion
+    /// began, but the clipboard tools can take seconds — time enough to lock
+    /// the screen, which would then receive the paste.
+    /// </param>
     public async Task<InsertionResult> InsertAsync(
         string text,
         InjectionPlan plan,
         PasteShortcut shortcut,
-        IReadOnlyDictionary<string, string> tools)
+        IReadOnlyDictionary<string, string> tools,
+        Func<string?>? sessionRefusal = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(plan);
@@ -123,6 +140,7 @@ public sealed class TextInjector
         }
 
         var clipboard = new Clipboard(tools, _log);
+        Func<string?> refusal = sessionRefusal ?? (() => null);
 
         switch (plan.Outcome)
         {
@@ -130,6 +148,11 @@ public sealed class TextInjector
                 return new InsertionResult(InsertionStatus.Failed, plan.Problem);
 
             case InjectionOutcome.ClipboardOnly:
+                if (await Task.Run(refusal).ConfigureAwait(false) is { } lockedMeanwhile)
+                {
+                    return new InsertionResult(InsertionStatus.Refused, lockedMeanwhile);
+                }
+
                 bool copied = await Task.Run(() => clipboard.SetText(plan.Clipboard, text)).ConfigureAwait(false);
 
                 return copied
@@ -139,10 +162,12 @@ public sealed class TextInjector
 
         if (plan.Mode == InsertionMode.Type)
         {
-            return await Task.Run(() => Type(text, plan.Keys, tools)).ConfigureAwait(false);
+            return await Task.Run(() => refusal() is { } refused
+                ? new InsertionResult(InsertionStatus.Refused, refused)
+                : Type(text, plan.Keys, tools)).ConfigureAwait(false);
         }
 
-        return await PasteAsync(text, plan, shortcut, tools, clipboard).ConfigureAwait(false);
+        return await PasteAsync(text, plan, shortcut, tools, clipboard, refusal).ConfigureAwait(false);
     }
 
     private async Task<InsertionResult> PasteAsync(
@@ -150,7 +175,8 @@ public sealed class TextInjector
         InjectionPlan plan,
         PasteShortcut shortcut,
         IReadOnlyDictionary<string, string> tools,
-        Clipboard clipboard)
+        Clipboard clipboard,
+        Func<string?> refusal)
     {
         ClipboardSnapshot previous = await Task.Run(() => clipboard.Capture(plan.Clipboard)).ConfigureAwait(false);
 
@@ -160,6 +186,15 @@ public sealed class TextInjector
         }
 
         await Task.Delay(SettleDelay).ConfigureAwait(false);
+
+        // The last moment before a key leaves: a screen locked while the
+        // clipboard was saved and filled must not receive the paste. The
+        // clipboard is put back as if nothing had happened.
+        if (await Task.Run(refusal).ConfigureAwait(false) is { } refused)
+        {
+            await Task.Run(() => clipboard.Restore(plan.Clipboard, previous)).ConfigureAwait(false);
+            return new InsertionResult(InsertionStatus.Refused, refused);
+        }
 
         bool pressed = await Task.Run(() => PressPaste(plan.Keys, shortcut, tools)).ConfigureAwait(false);
 

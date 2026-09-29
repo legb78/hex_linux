@@ -117,6 +117,9 @@ public readonly record struct ControlReply(ControlOutcome Outcome, string Detail
 
     public static ControlReply UnknownCommand { get; } = new(ControlOutcome.Error, "unknown-command");
 
+    /// <summary>The daemon did not act on the command in time; nothing is known of its state.</summary>
+    public static ControlReply Busy { get; } = new(ControlOutcome.Error, "busy");
+
     public string Format() => Outcome switch
     {
         ControlOutcome.Done => "ok " + Detail,

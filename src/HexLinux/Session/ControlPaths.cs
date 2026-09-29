@@ -46,4 +46,32 @@ public static class ControlPaths
 
         return Encoding.UTF8.GetByteCount(socketPath) <= MaxSocketPathBytes;
     }
+
+    /// <summary>
+    /// Where the single-instance lock may go, in order: the socket's folder
+    /// first, so that both sit together as they always did, then the runtime
+    /// and state folders. The server takes the first it can make private.
+    ///
+    /// <para><b>The lock does not depend on the socket.</b> A lock file has
+    /// no length limit: a path too long for a socket, or a socket folder that
+    /// belongs to someone else, used to leave the daemon without a lock at all
+    /// — two daemons, and every dictation inserted twice. Two daemons of the
+    /// same user compute the same list and meet on the same file.</para>
+    /// </summary>
+    public static IReadOnlyList<string> LockFolders(AppPaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        List<string> folders = [];
+
+        foreach (string? folder in (string?[])[Folder(paths), paths.RuntimeDirectory, paths.StateDirectory])
+        {
+            if (folder is not null && !folders.Contains(folder, StringComparer.Ordinal))
+            {
+                folders.Add(folder);
+            }
+        }
+
+        return folders;
+    }
 }

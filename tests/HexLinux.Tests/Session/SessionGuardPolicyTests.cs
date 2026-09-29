@@ -23,20 +23,46 @@ public class SessionGuardPolicyTests
     private const string Ssh = "Seat=\nRemote=yes\nType=tty\nActive=yes\nLockedHint=no\n";
     private const string WslTerminal = "Seat=\nRemote=no\nType=tty\nActive=yes\nLockedHint=no\n";
 
+    private const uint Me = 1000;
+
     [Fact]
     public void Without_logind_the_dictation_goes_on_and_loginctl_is_never_asked()
     {
         // WSL without systemd, a container: no seat, no lock to respect.
         GuardDecision decision = SessionGuardPolicy.Decide(
             logindPresent: false,
+            loginctlFound: false,
+            Me,
             "2",
             _ => throw new InvalidOperationException("loginctl must not run"),
+            () => throw new InvalidOperationException("loginctl must not run"),
             () => throw new InvalidOperationException("loginctl must not run"));
 
         Assert.True(decision.Allowed);
         Assert.True(decision.AllowsStart);
         Assert.False(decision.LogindKnown);
         Assert.Contains("no logind", decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_running_logind_that_cannot_be_asked_refuses_the_insertion()
+    {
+        // SEC-04: a daemon started with a PATH that lacks loginctl used to
+        // take the running logind for an absent one, and typed into a locked
+        // screen. Not being able to ask is not the same as having nothing to
+        // protect.
+        GuardDecision decision = SessionGuardPolicy.Decide(
+            logindPresent: true,
+            loginctlFound: false,
+            Me,
+            "2",
+            _ => throw new InvalidOperationException("there is no loginctl to run"),
+            () => throw new InvalidOperationException("there is no loginctl to run"),
+            () => throw new InvalidOperationException("there is no loginctl to run"));
+
+        Assert.False(decision.Allowed);
+        Assert.True(decision.LogindKnown);
+        Assert.Equal("logind runs but loginctl cannot be found: refused to be safe", decision.Reason);
     }
 
     [Fact]
@@ -165,14 +191,121 @@ public class SessionGuardPolicyTests
     public void The_terminal_session_of_wsl_is_its_own_display_session()
     {
         // What WSL with systemd really answers: session 1 is a seatless tty,
-        // and it is also the one logind names as the user's display.
-        var logind = new FakeLogind().Session("1", WslTerminal).DisplayIs("1\n");
+        // it is also the one logind names as the user's display, and nobody
+        // sits at seat0 (verified: "ActiveSession=", exit code 0).
+        var logind = new FakeLogind().Session("1", WslTerminal).DisplayIs("1\n").SeatActiveIs("\n");
 
         GuardDecision decision = logind.Decide("1");
 
         Assert.True(decision.Allowed);
         Assert.Equal("session 1: active, unlocked (tty, no seat)", decision.Reason);
         Assert.Equal(["1", "1"], logind.Asked);
+        Assert.Equal(1, logind.SeatQuestions);
+    }
+
+    [Fact]
+    public void A_seatless_display_session_while_another_user_sits_at_the_screen_is_refused()
+    {
+        // SEC-03: user A's only session is an SSH login (or a daemon left
+        // running from tmux), always "active" to logind; user B now sits at
+        // the machine. B's keys reach A's keyboards and B's Right Ctrl would
+        // start A's microphone: A is not in front, and must be told so.
+        var logind = new FakeLogind()
+            .Session("5", Ssh)
+            .Session("9", "Seat=seat0\nRemote=no\nType=wayland\nActive=yes\nLockedHint=no\nUser=1001\n")
+            .DisplayIs("5\n")
+            .SeatActiveIs("9\n");
+
+        GuardDecision decision = logind.Decide("5");
+
+        Assert.False(decision.Allowed);
+        Assert.True(decision.Inactive);
+        Assert.False(decision.AllowsStart);
+        Assert.Equal("another user's session (9) is in front of the screen", decision.Reason);
+    }
+
+    [Fact]
+    public void A_seatless_display_session_while_the_same_user_sits_at_the_screen_follows_that_session()
+    {
+        // The user logged in on a text console at the machine (seat0, tty):
+        // it is theirs, and its state — locked or not — decides.
+        var logind = new FakeLogind()
+            .Session("5", Ssh)
+            .Session("3", "Seat=seat0\nRemote=no\nType=tty\nActive=yes\nLockedHint=no\nUser=1000\n")
+            .DisplayIs("5\n")
+            .SeatActiveIs("3\n");
+
+        GuardDecision decision = logind.Decide(null);
+
+        Assert.True(decision.Allowed);
+        Assert.Equal("session 3: active, unlocked (tty, seat0)", decision.Reason);
+    }
+
+    [Fact]
+    public void A_graphical_display_session_needs_no_question_about_the_seat()
+    {
+        // The ordinary desktop: its own state says everything, and one
+        // process fewer is started.
+        var logind = new FakeLogind().Session("2", Desktop).DisplayIs("2\n");
+
+        Assert.True(logind.Decide(null).Allowed);
+        Assert.Equal(0, logind.SeatQuestions);
+    }
+
+    [Fact]
+    public void A_seat_that_does_not_answer_refuses_the_insertion()
+    {
+        // logind present and silent: fail closed, as for any other question.
+        var logind = new FakeLogind().Session("5", Ssh).DisplayIs("5\n").SeatFails();
+
+        GuardDecision decision = logind.Decide(null);
+
+        Assert.False(decision.Allowed);
+        Assert.True(decision.AllowsStart);
+        Assert.Equal("logind did not answer about who is in front of the screen: refused to be safe", decision.Reason);
+    }
+
+    [Theory]
+    [InlineData("-Hhost\n")]
+    [InlineData("9 10\n")]
+    public void A_seat_answer_that_is_no_session_id_is_never_passed_to_loginctl(string seat)
+    {
+        var logind = new FakeLogind().Session("5", Ssh).DisplayIs("5\n").SeatActiveIs(seat);
+
+        GuardDecision decision = logind.Decide(null);
+
+        Assert.False(decision.Allowed);
+        Assert.Equal(["5"], logind.Asked);
+        Assert.Equal("logind's answer about the seat could not be read: refused to be safe", decision.Reason);
+    }
+
+    [Fact]
+    public void A_session_in_front_whose_owner_is_not_said_is_refused_without_closing_the_keyboards()
+    {
+        // No evidence either way: the insertion waits, but the keyboards of
+        // what may well be this user's own session are not closed.
+        var logind = new FakeLogind()
+            .Session("5", Ssh)
+            .Session("9", Desktop)
+            .DisplayIs("5\n")
+            .SeatActiveIs("9\n");
+
+        GuardDecision decision = logind.Decide(null);
+
+        Assert.False(decision.Allowed);
+        Assert.False(decision.Inactive);
+        Assert.Equal("logind's answer for session 9 could not be read: refused to be safe", decision.Reason);
+    }
+
+    [Fact]
+    public void The_owner_of_a_session_is_read_as_a_number()
+    {
+        // loginctl prints "User=0" (verified with systemd 255); anything else
+        // is no uid.
+        Assert.Equal(1000u, LogindState.Parse("User=1000\n").User);
+        Assert.Null(LogindState.Parse("User=alice\n").User);
+        Assert.Null(LogindState.Parse("User=-1\n").User);
+        Assert.Null(LogindState.Parse("Active=yes\n").User);
     }
 
     [Fact]
@@ -223,8 +356,9 @@ public class SessionGuardPolicyTests
     [Fact]
     public void Deciding_without_a_way_to_ask_is_a_programming_error()
     {
-        Assert.Throws<ArgumentNullException>(() => SessionGuardPolicy.Decide(true, "2", null!, () => LoginctlAnswer.Failed));
-        Assert.Throws<ArgumentNullException>(() => SessionGuardPolicy.Decide(true, "2", _ => LoginctlAnswer.Failed, null!));
+        Assert.Throws<ArgumentNullException>(() => SessionGuardPolicy.Decide(true, true, Me, "2", null!, () => LoginctlAnswer.Failed, () => LoginctlAnswer.Failed));
+        Assert.Throws<ArgumentNullException>(() => SessionGuardPolicy.Decide(true, true, Me, "2", _ => LoginctlAnswer.Failed, null!, () => LoginctlAnswer.Failed));
+        Assert.Throws<ArgumentNullException>(() => SessionGuardPolicy.Decide(true, true, Me, "2", _ => LoginctlAnswer.Failed, () => LoginctlAnswer.Failed, null!));
     }
 
     [Theory]
@@ -237,16 +371,23 @@ public class SessionGuardPolicyTests
         Assert.Equal(allowsStart, new GuardDecision(false, "reason", true, inactive, locked).AllowsStart);
     }
 
-    /// <summary>loginctl as the policy sees it: one answer per session id, and the user's display.</summary>
+    /// <summary>
+    /// loginctl as the policy sees it: one answer per session id, the user's
+    /// display, and who sits at seat0 — nobody unless told otherwise, as
+    /// under WSL.
+    /// </summary>
     private sealed class FakeLogind
     {
         private readonly Dictionary<string, LoginctlAnswer> _sessions = new(StringComparer.Ordinal);
         private LoginctlAnswer _display = LoginctlAnswer.Failed;
+        private LoginctlAnswer _seat = new(true, "\n");
 
         /// <summary>The session ids passed to show-session, in order.</summary>
         public List<string> Asked { get; } = [];
 
         public int DisplayQuestions { get; private set; }
+
+        public int SeatQuestions { get; private set; }
 
         public FakeLogind Session(string id, string output)
         {
@@ -260,8 +401,20 @@ public class SessionGuardPolicyTests
             return this;
         }
 
+        public FakeLogind SeatActiveIs(string output)
+        {
+            _seat = new LoginctlAnswer(true, output);
+            return this;
+        }
+
+        public FakeLogind SeatFails()
+        {
+            _seat = LoginctlAnswer.Failed;
+            return this;
+        }
+
         public GuardDecision Decide(string? xdgSessionId) =>
-            SessionGuardPolicy.Decide(true, xdgSessionId, ShowSession, ShowUserDisplay);
+            SessionGuardPolicy.Decide(true, true, Me, xdgSessionId, ShowSession, ShowUserDisplay, ShowSeat);
 
         private LoginctlAnswer ShowSession(string id)
         {
@@ -273,6 +426,12 @@ public class SessionGuardPolicyTests
         {
             DisplayQuestions++;
             return _display;
+        }
+
+        private LoginctlAnswer ShowSeat()
+        {
+            SeatQuestions++;
+            return _seat;
         }
     }
 }

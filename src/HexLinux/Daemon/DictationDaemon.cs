@@ -41,8 +41,12 @@ namespace HexLinux.Daemon;
 /// run. A cancellation is final: segments of a cancelled dictation are not
 /// inserted, and its late completion cannot end the next dictation (the
 /// coordinator's generation number). Both were latent races in HexWin, made
-/// likelier here by a cancel command that can arrive during a
-/// transcription.</para>
+/// likelier here by a cancel command that can arrive during a transcription.
+/// The shortcut only ever acts on a dictation it started itself
+/// (<see cref="ChordCommands"/>): its keys are not withheld, and Right Ctrl+C
+/// typed during a transcription used to throw the text away. And stopping
+/// waits for the work under way, since the engine freed under a running
+/// decode crashed the process.</para>
 /// </summary>
 [ExcludeFromCodeCoverage(Justification = "Orchestration shell: needs a microphone, a keyboard or the socket, and a desktop. Verified by the daemon smoke tests; its decisions are the tested pure classes it calls.")]
 public sealed class DictationDaemon : IDisposable
@@ -55,7 +59,17 @@ public sealed class DictationDaemon : IDisposable
     /// </summary>
     private static readonly TimeSpan CueLead = TimeSpan.FromMilliseconds(250);
 
-    private static readonly TimeSpan SessionPollInterval = TimeSpan.FromSeconds(2);
+    /// <summary>A stop waits at most one 50 ms read; past this, the capture thread is stuck.</summary>
+    private static readonly TimeSpan RecorderStopTimeout = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// How long a stop waits for the dictation under way — its transcription,
+    /// its paste and the clipboard's restoration — before ending the loop.
+    /// </summary>
+    private static readonly TimeSpan ShutdownDrain = TimeSpan.FromSeconds(5);
+
+    /// <summary>How long the session check made before an insertion stays good for its keystroke.</summary>
+    private static readonly TimeSpan GuardFreshness = TimeSpan.FromMilliseconds(500);
 
     private readonly SerialContext _loop;
     private readonly AppPaths _paths;
@@ -88,6 +102,9 @@ public sealed class DictationDaemon : IDisposable
     /// <summary>The coordinator's generation of the current dictation.</summary>
     private int _generation;
 
+    /// <summary>The generation of the last dictation the shortcut itself started, or 0.</summary>
+    private int _chordGeneration;
+
     /// <summary>Tag of the last recording started, and of the one the current dictation uses.</summary>
     private int _lastRecording;
     private int _activeRecording;
@@ -98,6 +115,14 @@ public sealed class DictationDaemon : IDisposable
     private GuardDecision? _lastGuard;
     private StatusSnapshot? _lastSnapshot;
     private bool _surfaceFailureLogged;
+
+    /// <summary>Session checks started so far, and the newest one whose answer was applied.</summary>
+    private long _checksStarted;
+    private long _checkApplied;
+
+    /// <summary>Set once a stop was asked for: no dictation starts any more.</summary>
+    private bool _stopping;
+    private int _stopRequested;
 
     public DictationDaemon(
         SerialContext loop,
@@ -140,6 +165,7 @@ public sealed class DictationDaemon : IDisposable
         _recorder = new AudioRecorder(RecordingGuards.From(settings), settings.SegmentPause());
         _recorder.SegmentReady += (_, segment) => _loop.Post(() => OnSegmentReady(segment));
         _recorder.MaximumReached += (_, recording) => _loop.Post(() => OnMaximumReached(recording));
+        _recorder.CaptureLost += (_, recording) => _loop.Post(() => OnCaptureLost(recording));
 
         var detector = new ChordDetector(settings.Hotkey);
         _tracker = new HotkeyTracker(detector);
@@ -175,9 +201,65 @@ public sealed class DictationDaemon : IDisposable
         PushSnapshot();
         _keyboard.Start();
 
-        _sessionPoll = new Timer(_ => PollSession(), null, TimeSpan.Zero, SessionPollInterval);
+        // One shot, rescheduled after each answer (SessionPollPolicy).
+        _sessionPoll = new Timer(_ => PollSession(), null, TimeSpan.Zero, Timeout.InfiniteTimeSpan);
 
         _ = LoadEngineAsync();
+    }
+
+    /// <summary>
+    /// Asks the daemon to stop — a signal, the end of the session. May be
+    /// called on any thread. The work under way ends first, a few seconds at
+    /// most; a second request does not wait.
+    /// </summary>
+    public void RequestStop()
+    {
+        if (Interlocked.Exchange(ref _stopRequested, 1) == 1)
+        {
+            _loop.Complete();
+            return;
+        }
+
+        _loop.Post(() => _ = StopAsync());
+    }
+
+    /// <summary>
+    /// Stops taking dictations, lets the one under way finish what cannot be
+    /// cut — a decode inside the engine, a paste waiting to restore the
+    /// clipboard — then ends the loop. Nothing more is inserted: the session
+    /// is closing, or the user asked to quit.
+    /// </summary>
+    private async Task StopAsync()
+    {
+        if (_stopping)
+        {
+            return;
+        }
+
+        _stopping = true;
+
+        if (_confirmation.Disarm())
+        {
+            DiscardIfCurrent(_lastRecording);
+        }
+
+        if (_coordinator.State is DictationState.Recording or DictationState.Transcribing)
+        {
+            _log.Write("stopping during a dictation: nothing more of it is inserted");
+            OnDictationCancelled();
+        }
+
+        if (!_segments.IsCompleted)
+        {
+            Task drained = await Task.WhenAny(_segments, Task.Delay(ShutdownDrain)).ConfigureAwait(true);
+
+            if (drained != _segments)
+            {
+                _log.Write($"the dictation under way did not finish within {ShutdownDrain.TotalSeconds:F0} s");
+            }
+        }
+
+        _loop.Complete();
     }
 
     // --- Engine lifecycle -------------------------------------------------------
@@ -206,11 +288,14 @@ public sealed class DictationDaemon : IDisposable
             _log.Write($"ready ({_settings.Provider}, {_settings.Threads} threads)");
             _coordinator.MarkReady();
         }
-        catch (Exception ex) when (ex is FileNotFoundException or InvalidOperationException or DllNotFoundException or ObjectDisposedException)
+        catch (Exception ex)
         {
-            _log.Write($"model loading failed: {ex.Message}");
+            // Deliberately broad: nobody awaits this task, and an exception
+            // left in it would leave the daemon "loading" for ever — grey
+            // icon, dead shortcut, no word said (RV-05).
+            _log.Write($"model loading failed: {ex.GetType().Name}: {ex.Message}");
             _coordinator.MarkFailed();
-            Notify("Model unusable", "The speech model is missing or damaged. Run scripts/get-model.sh, then restart HexLinux.");
+            Notify("Model unusable", "The speech model is missing or damaged. Run get-model.sh again, then restart HexLinux.");
         }
     }
 
@@ -218,31 +303,49 @@ public sealed class DictationDaemon : IDisposable
 
     private void Handle(ChordAction action)
     {
-        switch (action)
+        bool chordOwnsDictation = _chordGeneration != 0 && _chordGeneration == _coordinator.Generation;
+
+        switch (ChordCommands.Resolve(action, _coordinator.State, _confirmation.IsArmed, chordOwnsDictation))
         {
-            case ChordAction.Start:
-                OnChordStart();
+            case ChordEffect.Arm:
+                OnChordArm();
                 break;
-            case ChordAction.Stop:
-                OnChordStop();
+
+            case ChordEffect.Disarm:
+                // A shortcut, not a dictation: nothing was said to the user,
+                // and nothing is logged.
+                _confirmation.Disarm();
+                DiscardIfCurrent(_lastRecording);
                 break;
-            case ChordAction.Cancel:
-                OnChordCancel();
+
+            case ChordEffect.Stop:
+                OnDictationEnded();
                 break;
+
+            case ChordEffect.Cancel:
+                OnDictationCancelled();
+                break;
+
             default:
                 break;
         }
     }
 
-    private void OnChordStart()
+    private void OnChordArm()
     {
-        if (_coordinator.State != DictationState.Idle || !SessionAllowsStart())
+        if (_stopping || !SessionAllowsStart())
         {
             return;
         }
 
         _armedAt = _clock.Elapsed;
         int arming = _confirmation.Arm(_armedAt);
+
+        // The last answer may be a quarter of a minute old: asked again now,
+        // it arrives well within the confirmation delay, and a screen locked
+        // since then disarms before any tone.
+        RequestSessionCheck();
+
         _ = ArmAsync(arming);
     }
 
@@ -269,7 +372,7 @@ public sealed class DictationDaemon : IDisposable
             await Task.Delay(remaining).ConfigureAwait(true);
         }
 
-        if (!_confirmation.TryConfirm(arming, _clock.Elapsed))
+        if (_stopping || !_confirmation.TryConfirm(arming, _clock.Elapsed))
         {
             // Released or interrupted meanwhile: the stop already dropped the
             // recording — unless a command started a dictation on it since.
@@ -282,31 +385,11 @@ public sealed class DictationDaemon : IDisposable
         }
 
         _armedFor = _clock.Elapsed - _armedAt;
-        BeginRecording(recording);
-    }
 
-    private void OnChordStop()
-    {
-        if (_confirmation.Disarm())
+        if (BeginRecording(recording))
         {
-            // A shortcut, not a dictation: nothing was said to the user, and
-            // nothing is logged.
-            DiscardIfCurrent(_lastRecording);
-            return;
+            _chordGeneration = _coordinator.Generation;
         }
-
-        OnDictationEnded();
-    }
-
-    private void OnChordCancel()
-    {
-        if (_confirmation.Disarm())
-        {
-            DiscardIfCurrent(_lastRecording);
-            return;
-        }
-
-        OnDictationCancelled();
     }
 
     // --- One dictation, end to end ----------------------------------------------
@@ -338,12 +421,13 @@ public sealed class DictationDaemon : IDisposable
         }
     }
 
-    private void BeginRecording(int recording)
+    /// <summary>Returns false when the coordinator refused the start.</summary>
+    private bool BeginRecording(int recording)
     {
         if (!_coordinator.TryStartRecording())
         {
             DiscardIfCurrent(recording);
-            return;
+            return false;
         }
 
         _activeRecording = recording;
@@ -362,6 +446,7 @@ public sealed class DictationDaemon : IDisposable
         // speaking.
         _engines.SetBusy(true);
         _engines.BeginLoad();
+        return true;
     }
 
     private void OnSegmentReady(RecordedSegment segment)
@@ -381,6 +466,21 @@ public sealed class DictationDaemon : IDisposable
         }
     }
 
+    /// <summary>
+    /// The sound server stopped delivering mid-recording. What was heard is
+    /// transcribed and inserted, and the user learns why the dictation ended
+    /// early — rather than keep "recording" nothing until the ceiling.
+    /// </summary>
+    private void OnCaptureLost(int recording)
+    {
+        if (recording == _activeRecording && _coordinator.State == DictationState.Recording)
+        {
+            _log.Write("the microphone stopped delivering during the recording: transcribing what was heard");
+            Notify("Microphone lost", "The microphone stopped during the dictation. What was said until then is inserted.");
+            OnDictationEnded();
+        }
+    }
+
     private void OnDictationEnded()
     {
         if (!_coordinator.TryStartTranscribing())
@@ -395,7 +495,21 @@ public sealed class DictationDaemon : IDisposable
     {
         // Null when the press was too brief, or when what is left after the
         // last pause holds no speech.
-        RecordedAudio? remainder = await _recorder.StopAsync().ConfigureAwait(true);
+        RecordedAudio? remainder;
+
+        try
+        {
+            remainder = await _recorder.StopAsync().WaitAsync(RecorderStopTimeout).ConfigureAwait(true);
+        }
+        catch (TimeoutException)
+        {
+            // The capture thread is stuck in the sound server: the end of the
+            // recording is lost, but the daemon must not stay "transcribing"
+            // until it is restarted.
+            _log.Write($"the microphone did not close within {RecorderStopTimeout.TotalSeconds:F0} s: the end of the recording is lost");
+            Notify("Microphone not responding", "The end of the dictation was lost. Run hexlinux --doctor if it happens again.");
+            remainder = null;
+        }
 
         if (remainder is { } audio)
         {
@@ -486,12 +600,11 @@ public sealed class DictationDaemon : IDisposable
                 return;
             }
 
-            // Returns at once if the model is there, otherwise waits for the
-            // load that started with the dictation.
-            ParakeetEngine engine = await _engines.GetAsync().ConfigureAwait(true);
-
+            // Loads the model if needed — the load started with the dictation
+            // is usually done — and holds it while decoding: a stop waits for
+            // the decode instead of freeing the engine under it.
             using var wav = new MemoryStream(audio.Wav);
-            TranscriptionResult result = await engine.TranscribeAsync(wav).ConfigureAwait(true);
+            TranscriptionResult result = await _engines.TranscribeAsync(wav).ConfigureAwait(true);
 
             double peak = AudioLevel.Peak(audio.Wav.AsSpan(WavFile.HeaderSize), lead);
 
@@ -545,11 +658,15 @@ public sealed class DictationDaemon : IDisposable
             return;
         }
 
+        // Asked again right before the keystroke if the clipboard tools took
+        // their time: a screen locked meanwhile must not receive the paste.
+        Func<string?> sessionRefusal = _guard.RefusalAfter(GuardFreshness);
+
         (InjectionContext context, IReadOnlyDictionary<string, string> tools) =
             await Task.Run(() => _injector.Survey(_session)).ConfigureAwait(true);
 
         InjectionPlan plan = InjectionPlanner.Plan(_settings.Insertion, _settings.KeySender, _settings.ClipboardFallback, context);
-        InsertionResult inserted = await _injector.InsertAsync(text, plan, _settings.PasteShortcut, tools).ConfigureAwait(true);
+        InsertionResult inserted = await _injector.InsertAsync(text, plan, _settings.PasteShortcut, tools, sessionRefusal).ConfigureAwait(true);
 
         switch (inserted.Status)
         {
@@ -561,6 +678,11 @@ public sealed class DictationDaemon : IDisposable
             case InsertionStatus.Failed:
                 _log.Write($"not inserted: {inserted.Problem}");
                 Notify("Dictation not inserted", "Nothing could insert the text here. Run hexlinux --doctor to see what is missing.");
+                break;
+
+            case InsertionStatus.Refused:
+                _log.Write($"not inserted: {inserted.Problem}");
+                Notify("Dictation not inserted", "The session was locked, not in front, or could not be checked.");
                 break;
 
             default:
@@ -604,15 +726,41 @@ public sealed class DictationDaemon : IDisposable
 
     // --- The session ------------------------------------------------------------
 
-    /// <summary>Off the loop, every couple of seconds: loginctl takes a process start.</summary>
+    /// <summary>
+    /// Off the loop, on the timer's thread: loginctl takes a process start.
+    /// Nothing may escape — an exception on a timer thread ends the process —
+    /// and the next check must always be scheduled.
+    /// </summary>
     private void PollSession()
     {
-        GuardDecision decision = _guard.Check();
-        _loop.Post(() => OnSessionChecked(decision));
+        long ticket = Interlocked.Increment(ref _checksStarted);
+
+        try
+        {
+            GuardDecision decision = _guard.Check();
+            _loop.Post(() => OnSessionChecked(ticket, decision));
+        }
+        catch (Exception ex)
+        {
+            _loop.Post(() =>
+            {
+                _log.Write($"session check failed: {ex.GetType().Name}: {ex.Message}");
+                ScheduleSessionCheck(SessionPollPolicy.Watchful);
+            });
+        }
     }
 
-    private void OnSessionChecked(GuardDecision decision)
+    private void OnSessionChecked(long ticket, GuardDecision decision)
     {
+        // Two checks can overlap — the timer's and one asked for by a press:
+        // an older answer arriving last must not undo a newer one.
+        if (ticket < _checkApplied)
+        {
+            return;
+        }
+
+        _checkApplied = ticket;
+
         if (_lastGuard?.Reason != decision.Reason)
         {
             _log.Write($"session: {decision.Reason}");
@@ -629,6 +777,46 @@ public sealed class DictationDaemon : IDisposable
         else
         {
             _keyboard.Resume();
+        }
+
+        // Locked or left behind while dictating: the microphone stops now,
+        // whoever started the dictation — the shortcut, a command or the tray
+        // (RV-08).
+        if (!decision.AllowsStart)
+        {
+            if (_confirmation.Disarm())
+            {
+                DiscardIfCurrent(_lastRecording);
+                _log.Write($"dictation refused: {decision.Reason}");
+            }
+            else if (_coordinator.State == DictationState.Recording)
+            {
+                _log.Write($"dictation stopped: {decision.Reason}");
+                OnDictationCancelled();
+            }
+        }
+
+        bool busy = _confirmation.IsArmed || _coordinator.State is DictationState.Recording or DictationState.Transcribing;
+        ScheduleSessionCheck(SessionPollPolicy.NextCheck(decision, busy));
+    }
+
+    /// <summary>Asks logind now, off the loop, instead of at the next scheduled check.</summary>
+    private void RequestSessionCheck() => ScheduleSessionCheck(TimeSpan.Zero);
+
+    private void ScheduleSessionCheck(TimeSpan due)
+    {
+        if (_stopping)
+        {
+            return;
+        }
+
+        try
+        {
+            _sessionPoll?.Change(due, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException)
+        {
+            // Stopping: no more checks.
         }
     }
 
@@ -666,7 +854,7 @@ public sealed class DictationDaemon : IDisposable
                 return;
             }
 
-            switch (ControlCommands.Resolve(command, _coordinator.State))
+            switch (_stopping ? ChordAction.None : ControlCommands.Resolve(command, _coordinator.State))
             {
                 case ChordAction.Start:
                     await StartFromCommandAsync().ConfigureAwait(true);
@@ -702,6 +890,10 @@ public sealed class DictationDaemon : IDisposable
             return;
         }
 
+        // The last answer may be old: a screen locked since is seen within
+        // moments, and the recording stopped.
+        RequestSessionCheck();
+
         // A shortcut being armed gives way to the command, which takes over
         // the microphone it already opened, and its tag with it.
         bool armed = _confirmation.Disarm();
@@ -709,6 +901,12 @@ public sealed class DictationDaemon : IDisposable
 
         if (!await OpenMicrophoneAsync(recording, () => true).ConfigureAwait(true))
         {
+            return;
+        }
+
+        if (_stopping)
+        {
+            DiscardIfCurrent(recording);
             return;
         }
 
@@ -737,7 +935,8 @@ public sealed class DictationDaemon : IDisposable
 
             case SurfaceRequestKind.Quit:
                 _log.Write("quit asked from the tray");
-                _loop.Complete();
+                Interlocked.Exchange(ref _stopRequested, 1);
+                _ = StopAsync();
                 break;
 
             default:
@@ -832,8 +1031,13 @@ public sealed class DictationDaemon : IDisposable
         }
     }
 
+    /// <summary>
+    /// Called on the main thread once the loop has ended. The engine waits,
+    /// a few seconds at most, for a load or a decode still in its native code.
+    /// </summary>
     public void Dispose()
     {
+        _stopping = true;
         _sessionPoll?.Dispose();
         _keyboard.Dispose();
         _recorder.Dispose();

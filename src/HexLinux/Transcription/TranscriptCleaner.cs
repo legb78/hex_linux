@@ -108,19 +108,25 @@ public static partial class TranscriptCleaner
     /// silently stop the cleaning from matching anything.
     /// </summary>
     /// <remarks>
-    /// The tail pattern <c>(?:[^.!?\n]|\.(?=\p{Ll}))*</c> runs to the end of
-    /// the sentence but steps over a full stop followed by a lowercase letter:
-    /// otherwise "Amara.org" would cut the match in half and leave an orphaned
-    /// "org" in the inserted text.
+    /// <para>The tail pattern <c>(?:[^.!?\n]|\.(?=\p{Ll}))*</c> runs to the end
+    /// of the sentence but steps over a full stop followed by a lowercase
+    /// letter: otherwise "Amara.org" would cut the match in half and leave an
+    /// orphaned "org" in the inserted text.</para>
+    ///
+    /// <para>The three closing lines with no attribution marker — "Merci
+    /// d'avoir regardé cette vidéo", "Abonnez-vous", "Thanks for watching" —
+    /// only go when they make up a sentence of their own: at the start of the
+    /// text or after a full stop, and followed by the end of the sentence or
+    /// of the text. Matched anywhere, they cut real dictations short: "Thanks
+    /// for watching the kids yesterday." came out as "the kids yesterday."
+    /// (QA-12, a behaviour inherited from HexWin).</para>
     /// </remarks>
     [GeneratedRegex(
         @"(?:Sous-titr(?:es|age)\s+(?:r[ée]alis[ée]s?\s+par|par|Soci[ée]t[ée]|ST['’]|MFP\b)"
         + @"(?:[^.!?\n]|\.(?=\p{Ll}))*[.!?]?)"
         + @"|(?:SousTitreur\.com)"
         + @"|(?:Amara\.org)"
-        + @"|(?:Merci d'avoir regard[ée] cette vid[ée]o\s*!?)"
-        + @"|(?:Abonnez-vous\s*!?)"
-        + @"|(?:Thanks for watching\s*!?)"
+        + @"|(?:(?<=^\s*|[.!?]\s+)(?:Merci d'avoir regard[ée] cette vid[ée]o|Abonnez-vous|Thanks for watching)(?:\s*[.!?]+|\s*$))"
         + @"|(?:Subtitles by(?:[^.!?\n]|\.(?=\p{Ll}))*[.!?]?)",
         RegexOptions.IgnoreCase)]
     private static partial Regex HallucinatedCredits();

@@ -446,4 +446,48 @@ public class ChordDetectorTests
         Assert.Throws<ArgumentNullException>(() => new ChordDetector(null!));
         Assert.Throws<ArgumentNullException>(() => DefaultShortcut().Forget(null!));
     }
+
+    [Theory]
+    [InlineData(LeftCtrl, RightCtrl)]
+    [InlineData(RightCtrl, LeftCtrl)]
+    public void Overlapping_key_names_start_whichever_key_comes_first(int first, int second)
+    {
+        // QA-07: ["Ctrl", "RightCtrl"] means both Control keys. Right Ctrl
+        // pressed first used to take the generic "Ctrl" slot, and Left Ctrl
+        // then fitted nowhere: the shortcut worked in one order only.
+        var detector = new ChordDetector(["Ctrl", "RightCtrl"]);
+
+        Assert.Equal(ChordAction.None, detector.OnKeyDown(first));
+        Assert.Equal(ChordAction.Start, detector.OnKeyDown(second));
+        Assert.Equal(ChordAction.Stop, detector.OnKeyUp(first));
+    }
+
+    [Fact]
+    public void A_key_moved_to_another_slot_is_still_released_as_itself()
+    {
+        // Moving Right Ctrl to the slot that wants it exactly must not lose
+        // track of it: releasing either key ends the dictation, and the next
+        // press starts again.
+        var detector = new ChordDetector(["Ctrl", "RightCtrl"]);
+
+        detector.OnKeyDown(RightCtrl);
+        detector.OnKeyDown(LeftCtrl);
+
+        Assert.Equal(ChordAction.Stop, detector.OnKeyUp(RightCtrl));
+        Assert.Equal(ChordAction.None, detector.OnKeyUp(LeftCtrl));
+        Assert.False(detector.IsAnyHeld);
+
+        detector.OnKeyDown(LeftCtrl);
+        Assert.Equal(ChordAction.Start, detector.OnKeyDown(RightCtrl));
+    }
+
+    [Fact]
+    public void A_key_no_slot_can_take_even_after_moving_is_still_foreign()
+    {
+        // Both slots full with the two Control keys: a letter is foreign and
+        // cancels, as always.
+        ChordDetector detector = Started(new ChordDetector(["Ctrl", "RightCtrl"]), RightCtrl, LeftCtrl);
+
+        Assert.Equal(ChordAction.Cancel, detector.OnKeyDown(KeyC));
+    }
 }

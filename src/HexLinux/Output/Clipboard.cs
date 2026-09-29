@@ -68,7 +68,15 @@ public sealed class Clipboard
                 return ClipboardSnapshot.Nothing;
             }
 
-            format = ClipboardFormats.Preferred(ClipboardFormats.ParseList(listed.OutputText));
+            IReadOnlyList<string> offered = ClipboardFormats.ParseList(listed.OutputText);
+
+            if (ClipboardFormats.IsMarkedSecret(offered))
+            {
+                _log("a password manager's secret was in the clipboard: it will be cleared after the paste, not restored");
+                return ClipboardSnapshot.Nothing;
+            }
+
+            format = ClipboardFormats.Preferred(offered);
         }
         else
         {

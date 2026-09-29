@@ -125,44 +125,56 @@ if [ -z "$packaging" ]; then
   exit 1
 fi
 
-# Refuses a file whose active lines are not exactly the expected one.
-check() {
-  local file="$1" expected="$2" active
+# Reads a file ONCE and prints it, after refusing it when its active lines
+# are not exactly the expected one. What is checked is what gets installed:
+# the copy beside the script belongs to the user, and one read to check and
+# another to install would let it be swapped in between (a udev rule can run
+# programs as root).
+load() {
+  local file="$1" expected="$2" content active
   if [ ! -f "$file" ] || [ -L "$file" ]; then
     echo "$file is missing or is not a regular file." >&2
-    exit 1
+    return 1
   fi
-  active="$(grep -vE '^[[:space:]]*(#|$)' -- "$file" || true)"
+  content="$(cat -- "$file")"
+  active="$(printf '%s\n' "$content" | grep -vE '^[[:space:]]*(#|$)' || true)"
   if [ "$active" != "$expected" ]; then
     echo "$file does not hold the expected rule; refusing to install it. Its active lines:" >&2
     printf '%s\n' "$active" >&2
-    exit 1
+    return 1
   fi
+  printf '%s\n' "$content"
 }
 
-# Shows the file, then installs it root-owned and read-only for others.
+# Shows the content, then writes it root-owned and read-only for others,
+# through a file beside the target (in a folder only root can write to) and a
+# rename, so that udev never reads half a rule.
 put() {
-  local source="$1" target="$2"
+  local content="$1" target="$2" staged
   echo ""
   echo "--- $target"
-  cat -- "$source"
+  printf '%s\n' "$content"
   echo "---"
-  if [ -n "$destdir" ]; then
-    install -D -m 0644 -- "$source" "$target"
-  else
-    install -D -m 0644 -o root -g root -- "$source" "$target"
+  mkdir -p -- "$(dirname -- "$target")"
+  staged="$target.hexlinux-new"
+  rm -f -- "$staged"
+  (umask 077 && printf '%s\n' "$content" > "$staged")
+  chmod 0644 -- "$staged"
+  if [ -z "$destdir" ]; then
+    chown root:root -- "$staged"
   fi
+  mv -f -- "$staged" "$target"
   echo "Installed $target"
 }
 
-check "$packaging/udev/70-hexlinux.rules" "$keyboard_rule"
-put "$packaging/udev/70-hexlinux.rules" "$keyboard_target"
+keyboard_content="$(load "$packaging/udev/70-hexlinux.rules" "$keyboard_rule")" || exit 1
+put "$keyboard_content" "$keyboard_target"
 
 if [ "$with_uinput" -eq 1 ]; then
-  check "$packaging/udev/70-hexlinux-uinput.rules" "$uinput_rule"
-  check "$packaging/modules-load.d/hexlinux.conf" "$module_line"
-  put "$packaging/udev/70-hexlinux-uinput.rules" "$uinput_target"
-  put "$packaging/modules-load.d/hexlinux.conf" "$module_target"
+  uinput_content="$(load "$packaging/udev/70-hexlinux-uinput.rules" "$uinput_rule")" || exit 1
+  module_content="$(load "$packaging/modules-load.d/hexlinux.conf" "$module_line")" || exit 1
+  put "$uinput_content" "$uinput_target"
+  put "$module_content" "$module_target"
 
   if [ -z "$destdir" ] && [ ! -e /dev/uinput ]; then
     if command -v modprobe >/dev/null 2>&1 && modprobe uinput; then

@@ -370,7 +370,21 @@ public sealed class AppSettings
             {
                 foreach (JsonProperty property in document.RootElement.EnumerateObject())
                 {
-                    Apply(settings, property, found);
+                    try
+                    {
+                        Apply(settings, property, found);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Half of a \u escape pair — "\ud83d" left when the
+                        // other half was deleted — is valid JSON that
+                        // System.Text.Json refuses to turn into a string,
+                        // with this exception rather than a JsonException.
+                        // In a key name it used to stop every mode at start
+                        // (QA-02). The entry is skipped: its name cannot be
+                        // read, let alone quoted.
+                        found.Add("a setting whose name holds an incomplete \\u escape (a lone surrogate) was ignored");
+                    }
                 }
             }
             else
@@ -402,17 +416,17 @@ public sealed class AppSettings
             return;
         }
 
-        if (target.PropertyType == typeof(FeedbackMode)
-            && property.Value.ValueKind == JsonValueKind.String
-            && FeedbackAliases.TryGetValue(property.Value.GetString()!.Trim(), out FeedbackMode alias))
-        {
-            settings.Feedback = alias;
-            notes.Add($"\"feedback\": {property.Value.GetRawText()} is a HexWin mode: read as \"{alias}\"");
-            return;
-        }
-
         try
         {
+            if (target.PropertyType == typeof(FeedbackMode)
+                && property.Value.ValueKind == JsonValueKind.String
+                && FeedbackAliases.TryGetValue(property.Value.GetString()!.Trim(), out FeedbackMode alias))
+            {
+                settings.Feedback = alias;
+                notes.Add($"\"feedback\": {property.Value.GetRawText()} is a HexWin mode: read as \"{alias}\"");
+                return;
+            }
+
             target.SetValue(settings, property.Value.Deserialize(target.PropertyType, JsonOptions));
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
