@@ -432,11 +432,13 @@ internal static class Program
         try
         {
             Console.WriteLine($"Model    : {Path.GetFileName(modelPath)}");
-            Console.WriteLine($"Compute  : {settings.Provider}, {settings.Threads} threads");
+            int threads = DecodingThreads.Resolve(settings.Threads);
+
+            Console.WriteLine($"Compute  : {settings.Provider}, {threads} threads{(settings.Threads == 0 ? " (one per physical core)" : "")}");
             Console.WriteLine($"Audio    : {RecordingFormat.DurationOf(format.DataLength).TotalSeconds:F2} s");
             Console.WriteLine("Loading the model...");
 
-            using ParakeetEngine engine = ParakeetEngine.Load(modelPath, settings.Provider, settings.Threads, settings.FrenchSpacing);
+            using ParakeetEngine engine = ParakeetEngine.Load(modelPath, settings.Provider, threads, settings.FrenchSpacing);
 
             Console.WriteLine();
 
@@ -445,7 +447,10 @@ internal static class Program
             using var wav = new MemoryStream(WavFile.Create(file.AsSpan(format.DataOffset, format.DataLength)));
             TranscriptionResult result = engine.TranscribeAsync(wav).GetAwaiter().GetResult();
 
-            Console.WriteLine(result.Text.Length > 0 ? result.Text : "(nothing usable)");
+            // Through the joiner, as in the daemon: the spoken edits are
+            // applied there.
+            string text = new SegmentJoiner().Next(InsertionText.Sanitize(result.Text), isLast: true).Text;
+            Console.WriteLine(text.Length > 0 ? text : "(nothing usable)");
             Console.WriteLine();
             Console.WriteLine($"Transcribed in {result.Duration.TotalSeconds:F2} s");
             return Success;
@@ -512,6 +517,7 @@ internal static class Program
             message => Console.Error.WriteLine(message));
 
         Console.WriteLine($"Shortcut: {HotkeyText.Describe(settings.Hotkey)} ({string.Join(" + ", settings.Hotkey)})");
+        Console.WriteLine("Keys a shortcut can use, named below when pressed: Ctrl, Alt, Shift, Super (left or right), F1 to F24, Pause.");
 
         foreach (string caveat in HotkeyText.Caveats(settings.Hotkey, settings.Segmentation))
         {

@@ -80,6 +80,27 @@ internal static partial class PulseSimple
     [LibraryImport(SimpleLibrary, EntryPoint = "pa_simple_free")]
     public static partial void Free(nint stream);
 
+    /// <summary>
+    /// <c>pa_usec_t pa_simple_get_latency(pa_simple *s, int *error)</c>
+    /// (<c>pulse/simple.h</c>; <c>pa_usec_t</c> is <c>uint64_t</c> in
+    /// <c>pulse/sample.h</c>): for a recording, how far behind the microphone
+    /// the reads are.
+    /// </summary>
+    [LibraryImport(SimpleLibrary, EntryPoint = "pa_simple_get_latency")]
+    private static partial ulong GetLatency(nint stream, out int error);
+
+    /// <summary>
+    /// The record latency in microseconds, or <c>PA_USEC_INVALID</c>
+    /// (<c>pulse/timeval.h</c>) when the server could not say — whether it
+    /// answered that value or set an error.
+    /// </summary>
+    public static ulong Latency(nint stream)
+    {
+        ulong latency = GetLatency(stream, out int error);
+
+        return error != 0 ? ulong.MaxValue : latency;
+    }
+
     /// <summary>A pointer to a static string: never marshalled as <c>string</c>, which would free it.</summary>
     [LibraryImport(PulseLibrary, EntryPoint = "pa_strerror")]
     private static partial nint StrErrorPointer(int error);

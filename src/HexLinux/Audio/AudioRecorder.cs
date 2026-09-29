@@ -19,17 +19,28 @@ public readonly record struct RecordedSegment(RecordedAudio Audio, int Recording
 ///
 /// <para>A deliberately thin shell around libpulse-simple: it opens a stream
 /// and hands the samples to a <see cref="SpeechSegmenter"/>. The decisions —
-/// too short, ceiling reached, pause long enough to cut — belong to
-/// <see cref="RecordingGuards"/> and to the segmenter, both testable without
-/// a microphone. Same events and same stop semantics as HexWin's
+/// too short, ceiling reached, pause long enough to cut, how much to read
+/// after the release — belong to <see cref="RecordingGuards"/>, to the
+/// segmenter and to <see cref="RecordingTail"/>, all testable without a
+/// microphone. Same events and same stop semantics as HexWin's
 /// recorder.</para>
 ///
 /// <para><b>One thread per recording, and it alone touches the stream.</b> A
 /// libpulse-simple stream is not thread-safe, and <c>pa_simple_read</c>
 /// blocks: the thread opens the stream, reads 50 ms at a time until asked to
-/// stop, then frees it — so a stop waits at most one read. Opening happens
-/// there too, off the daemon's loop, because <c>pa_simple_new</c> has no
-/// time limit of its own; <see cref="StartAsync"/> gives it one.</para>
+/// stop, then frees it — so a stop waits at most one read, plus the tail.
+/// Opening happens there too, off the daemon's loop, because
+/// <c>pa_simple_new</c> has no time limit of its own; <see cref="StartAsync"/>
+/// gives it one. Each recording rents its speech detector from a
+/// <see cref="DetectorPool"/> for the same reason: two recordings can overlap
+/// for the length of one read.</para>
+///
+/// <para><b>The last word.</b> A stop does not close the microphone at once:
+/// the thread goes on reading what <see cref="RecordingTail"/> says — the
+/// tail past the release and the server's backlog — and only then frees the
+/// stream. <see cref="StopAsync"/> completes after that, so a tone played
+/// once it has returned is not recorded over the last word. A
+/// <see cref="Discard"/> skips the tail: nothing of it would be kept.</para>
 /// </summary>
 [ExcludeFromCodeCoverage(Justification = "libpulse shell: needs a sound server and a microphone, verified by --record and the daemon smoke tests.")]
 public sealed class AudioRecorder : IDisposable
@@ -40,15 +51,21 @@ public sealed class AudioRecorder : IDisposable
     private static readonly uint FragmentBytes = (uint)RecordingFormat.BytesFor(TimeSpan.FromMilliseconds(50));
 
     private readonly RecordingGuards _guards;
+    private readonly DetectorPool _detectors;
     private readonly Lock _sync = new();
 
     private Capture? _current;
 
     /// <param name="guards">Minimum and maximum durations.</param>
     /// <param name="pause">Silence that closes a segment; zero to never cut.</param>
-    public AudioRecorder(RecordingGuards guards, TimeSpan pause)
+    /// <param name="detectors">
+    /// Tell speech from silence to find the pauses; the level threshold when
+    /// null. The recorder owns them and disposes of them.
+    /// </param>
+    public AudioRecorder(RecordingGuards guards, TimeSpan pause, DetectorPool? detectors = null)
     {
         _guards = guards;
+        _detectors = detectors ?? DetectorPool.Level();
         Pause = pause;
     }
 
@@ -107,7 +124,7 @@ public sealed class AudioRecorder : IDisposable
                 return _current.Opened.Task;
             }
 
-            capture = new Capture(this, new SpeechSegmenter(Pause), tag);
+            capture = new Capture(this, Pause, tag);
             _current = capture;
         }
 
@@ -131,11 +148,24 @@ public sealed class AudioRecorder : IDisposable
     }
 
     /// <summary>
-    /// Closes the microphone and returns what was not yet cut, or <c>null</c>
-    /// if the press was too brief to hold speech or nothing worth transcribing
-    /// is left.
+    /// Ends the recording without losing its last word — the tail and the
+    /// server's backlog are read first — then closes the microphone and
+    /// returns what was not yet cut, or <c>null</c> if the press was too brief
+    /// to hold speech or nothing worth transcribing is left. The recording
+    /// stops being the current one at once: a new one may start meanwhile.
     /// </summary>
-    public Task<RecordedAudio?> StopAsync()
+    public Task<RecordedAudio?> StopAsync() => End(abandon: false);
+
+    /// <summary>Closes the microphone at once and forgets what it heard.</summary>
+    public void Discard() => _ = End(abandon: true);
+
+    public void Dispose()
+    {
+        Discard();
+        _detectors.Dispose();
+    }
+
+    private Task<RecordedAudio?> End(bool abandon)
     {
         Capture? capture;
 
@@ -150,14 +180,10 @@ public sealed class AudioRecorder : IDisposable
             return Task.FromResult<RecordedAudio?>(null);
         }
 
+        capture.Abandoned = abandon;
         capture.Stopping = true;
         return capture.Finished.Task;
     }
-
-    /// <summary>Closes the microphone and forgets what it heard.</summary>
-    public void Discard() => _ = StopAsync();
-
-    public void Dispose() => Discard();
 
     private static RecordedAudio Wrap(byte[] pcm) =>
         new(WavFile.Create(pcm), RecordingFormat.DurationOf(pcm.Length));
@@ -172,7 +198,7 @@ public sealed class AudioRecorder : IDisposable
     }
 
     /// <summary>One recording, from the opening of the stream to its release.</summary>
-    private sealed class Capture(AudioRecorder owner, SpeechSegmenter segmenter, int tag)
+    private sealed class Capture(AudioRecorder owner, TimeSpan pause, int tag)
     {
         public int Tag { get; } = tag;
 
@@ -181,6 +207,9 @@ public sealed class AudioRecorder : IDisposable
         public TaskCompletionSource<RecordedAudio?> Finished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public volatile bool Stopping;
+
+        /// <summary>Set before <see cref="Stopping"/>: nothing more is kept, not even the tail.</summary>
+        public volatile bool Abandoned;
 
         public void Run()
         {
@@ -200,43 +229,71 @@ public sealed class AudioRecorder : IDisposable
 
             Opened.TrySetResult();
 
-            long received = 0;
-            bool maximumReported = false;
+            // Rented once the stream is open: making a detector may take a
+            // moment, and the server buffers what the microphone hears
+            // meanwhile.
+            ISpeechDetector detector = owner._detectors.Rent();
 
             try
             {
-                received = ReadUntilStopped(stream, ref maximumReported);
+                var segmenter = new SpeechSegmenter(pause, detector);
+                long received;
+
+                try
+                {
+                    received = ReadUntilStopped(stream, segmenter);
+                }
+                finally
+                {
+                    PulseSimple.Free(stream);
+                }
+
+                // Duration comes from the samples actually received, not from
+                // the clock: this is what the engine will hear.
+                if (Abandoned || owner._guards.IsTooShort(RecordingFormat.DurationOf(received)))
+                {
+                    Finished.TrySetResult(null);
+                    return;
+                }
+
+                Finished.TrySetResult(segmenter.Flush() is { } remainder ? Wrap(remainder) : null);
             }
             finally
             {
-                PulseSimple.Free(stream);
+                owner._detectors.Return(detector);
             }
-
-            // Duration comes from the samples actually received, not from the
-            // clock: this is what the engine will hear.
-            if (owner._guards.IsTooShort(RecordingFormat.DurationOf(received)))
-            {
-                Finished.TrySetResult(null);
-                return;
-            }
-
-            Finished.TrySetResult(segmenter.Flush() is { } remainder ? Wrap(remainder) : null);
         }
 
-        private unsafe long ReadUntilStopped(nint stream, ref bool maximumReported)
+        private unsafe long ReadUntilStopped(nint stream, SpeechSegmenter segmenter)
         {
             byte[] buffer = new byte[FragmentBytes];
             long received = 0;
             long maximum = owner._guards.MaximumBytes;
+            bool maximumReported = false;
 
-            while (!Stopping)
+            // Bytes still to read once a stop is asked for; negative until then.
+            long tail = -1;
+
+            while (!Abandoned)
             {
+                if (Stopping && tail < 0)
+                {
+                    tail = RecordingTail.BytesAfterStop(PulseSimple.Latency(stream));
+                }
+
+                if (tail == 0)
+                {
+                    break;
+                }
+
+                // Never more than the tail asks for: both are whole samples.
+                uint wanted = tail > 0 ? (uint)Math.Min(FragmentBytes, tail) : FragmentBytes;
                 int result;
                 int error;
 
                 fixed (byte* data = buffer)
                 {
-                    result = PulseSimple.Read(stream, data, FragmentBytes, out error);
+                    result = PulseSimple.Read(stream, data, wanted, out error);
                 }
 
                 if (result < 0)
@@ -251,6 +308,11 @@ public sealed class AudioRecorder : IDisposable
                     break;
                 }
 
+                if (tail > 0)
+                {
+                    tail -= wanted;
+                }
+
                 long room = maximum - received;
 
                 if (room <= 0)
@@ -258,7 +320,7 @@ public sealed class AudioRecorder : IDisposable
                     continue;
                 }
 
-                int kept = (int)Math.Min(buffer.Length, room);
+                int kept = (int)Math.Min(wanted, room);
                 byte[]? closed = segmenter.Push(buffer.AsSpan(0, kept));
                 received += kept;
 

@@ -16,12 +16,22 @@
 
   // The dictation language is not a setting: Parakeet v3 works out on its own
   // which of its 25 European languages is being spoken.
+  //
+  // Spoken edits are not settings either, always on: hesitations (euh, hum,
+  // uh, um…) are dropped, and "efface ça", "supprime la dernière phrase",
+  // "scratch that" or "delete the last sentence", said on its own, erases the
+  // sentence before it. With "segmentation" on, a sentence already inserted
+  // is erased with Backspace — only ever text the same dictation inserted,
+  // and once no Ctrl, Alt, Shift or Super key is held (with Ctrl, Backspace
+  // would erase whole words).
 
   // Keys to hold in order to dictate.
   // Accepted values: Ctrl, LeftCtrl, RightCtrl, Alt, LeftAlt, RightAlt,
   // Shift, LeftShift, RightShift, Super, LeftSuper, RightSuper (Win, LeftWin
-  // and RightWin are read as the Super keys), F13 through F24.
-  // "hexlinux --watch-hotkey" shows the name of a key as you press it.
+  // and RightWin are read as the Super keys), F1 through F24, Pause.
+  // "hexlinux --watch-hotkey" shows the name of a key as you press it. F1 to
+  // F12 still reach the application (F5 reloads a web page), and many laptops
+  // send media keys from that row unless Fn is held.
   //
   // Why Right Ctrl alone by default: on Linux the keys of the shortcut are
   // not withheld from the desktop, so the shortcut must be a key that does
@@ -32,10 +42,13 @@
   // Ctrl+V into Ctrl+Shift+V. A lone Super opens the overview when released,
   // a lone Alt reaches the menu bar: --doctor warns about such choices.
   //
-  // Space and CapsLock, accepted by HexWin, are refused here: held as a
-  // shortcut, Space would type spaces and CapsLock would toggle capitals,
-  // since the desktop still sees them. Fn emits no code the system can see.
-  // A shortcut naming a refused or unknown key falls back to the default.
+  // HexWin accepts any key; HexLinux refuses the keys that type, edit, move
+  // the cursor, toggle a state or that the desktop acts on — letters, digits,
+  // Space, Enter, the arrows, the numpad, CapsLock, Insert, media keys —
+  // since the desktop still sees them: held as a shortcut, Space would type
+  // spaces and CapsLock would toggle capitals. Fn emits no code the system
+  // can see. A shortcut naming a refused or unknown key falls back to the
+  // default, and --doctor says why.
   "hotkey": ["RightCtrl"],
 
   // Below this, the press is treated as accidental and ignored. It is also
@@ -57,9 +70,15 @@
   // The pause that closes a piece, when "segmentation" is true. Kept while it
   // is false, so turning it back on finds the same duration.
   //
-  // The pause is detected on the sound level, with the same threshold that
-  // tells a muted microphone from a quiet room. In a noisy place no pause is
-  // ever seen and the text simply arrives at release.
+  // The pause is found by Silero VAD, a small voice detector that tells
+  // speech from a fan or a street, when scripts/get-model.sh has put
+  // silero_vad.onnx next to the model. Without that file it is found on the
+  // sound level, with the threshold that tells a muted microphone from a
+  // quiet room: in a noisy place no pause is ever seen, and the text simply
+  // arrives at release.
+  //
+  // A sentence cut in two by a pause is stitched back: "Je voudrais parler"
+  // then "avec le client" gives one sentence, not two.
   "pauseMilliseconds": 700,
 
   // Minutes without dictating after which the model is freed from memory.
@@ -78,15 +97,17 @@
   // acceleration that cannot happen.
   "provider": "cpu",
 
-  // Threads allocated to decoding. Past a handful the gain collapses: the
-  // model is small and synchronisation costs more than parallelism returns.
-  "threads": 4,
+  // Threads allocated to decoding. 0 picks one per physical core, up to 8:
+  // past a handful the gain collapses, the model being small. Any other
+  // number, 1 to 32, is used as it is.
+  "threads": 0,
 
   // The space French typography puts before ? ! ; : and ». Parakeet writes
   // "vendredi?" the English way; true turns it into "vendredi ?", as HexWin
-  // always did. It applies to every language, because the engine does not
-  // reliably report which one it recognised: set false if you dictate in
-  // English, where "Are you ready?" must stay as it is.
+  // does, in text that reads as French only — judged by its small words and
+  // accents, since the engine does not say which language it heard — so
+  // "Are you ready?" stays as it is. A sentence with no clue either way
+  // ("Vendredi?") counts as French. false never adds the space.
   "frenchSpacing": true,
 
   // "Paste" : clipboard, then the paste shortcut. Instant, and the default.

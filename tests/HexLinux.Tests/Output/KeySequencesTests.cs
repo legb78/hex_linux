@@ -136,4 +136,52 @@ public class KeySequencesTests
             Assert.Contains(key, UinputAbi.DeclaredKeys);
         }
     }
+
+    // --- Spoken erase ---------------------------------------------------------------
+
+    [Fact]
+    public void An_erase_is_one_press_and_one_release_of_backspace_per_character()
+    {
+        // "efface ça" after "Le chat est vert": sixteen characters, sixteen
+        // Backspaces, each change in a report of its own.
+        IReadOnlyList<InputEvent[]> groups = KeySequences.Erase(16);
+
+        Assert.Equal(32, groups.Count);
+
+        for (int i = 0; i < groups.Count; i++)
+        {
+            InputEvent[] group = groups[i];
+
+            Assert.Equal(2, group.Length);
+            Assert.Equal(InputEvent.KeyEvent(LinuxKeys.Backspace, pressed: i % 2 == 0), group[0]);
+            Assert.True(group[1].IsSyncReport);
+        }
+    }
+
+    [Fact]
+    public void An_erase_leaves_no_key_down()
+    {
+        // A Backspace left down would repeat until the next key: it would eat
+        // the user's document.
+        IReadOnlyList<InputEvent[]> groups = KeySequences.Erase(5);
+
+        Assert.Equal(0, groups.Sum(group => group[0].Value == 1 ? 1 : -1));
+        Assert.Equal(0, groups[^1][0].Value);
+    }
+
+    [Fact]
+    public void Backspace_is_KEY_BACKSPACE_and_the_virtual_keyboard_declares_it()
+    {
+        // 14 in linux/input-event-codes.h, inside the 1-31 range udev
+        // requires: no new key had to be declared for it.
+        Assert.Equal(14, LinuxKeys.Backspace);
+        Assert.Contains(LinuxKeys.Backspace, UinputAbi.DeclaredKeys);
+    }
+
+    [Fact]
+    public void Erasing_nothing_sends_nothing_and_a_negative_count_is_refused()
+    {
+        Assert.Empty(KeySequences.Erase(0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => KeySequences.Erase(-1));
+    }
 }

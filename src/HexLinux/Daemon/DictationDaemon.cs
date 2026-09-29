@@ -36,6 +36,16 @@ namespace HexLinux.Daemon;
 /// session is unlocked and in front; the last insertion also waits for the
 /// modifiers to be let go.</para>
 ///
+/// <para><b>From HexWin's pull request #68.</b> The release does not end the
+/// recording at once: the microphone keeps the last word (the tail, see
+/// <see cref="RecordingTail"/>) and the state stays on Recording until it is
+/// closed, so that the end tone, played on leaving it, is not recorded over
+/// that word. Every segment goes through a <see cref="SegmentJoiner"/>, which
+/// stitches a sentence cut by a pause and applies the spoken edits; an
+/// "efface ça" aimed at a sentence already typed is carried out with
+/// Backspaces — only ever over text this dictation inserted, and never while
+/// a modifier is held, since Ctrl+Backspace erases a word.</para>
+///
 /// <para><b>What changed from the port, and why.</b> The chain of segments
 /// cannot be poisoned: a segment that fails is logged and the next ones still
 /// run. A cancellation is final: segments of a cancelled dictation are not
@@ -59,7 +69,11 @@ public sealed class DictationDaemon : IDisposable
     /// </summary>
     private static readonly TimeSpan CueLead = TimeSpan.FromMilliseconds(250);
 
-    /// <summary>A stop waits at most one 50 ms read; past this, the capture thread is stuck.</summary>
+    /// <summary>
+    /// A stop waits for the tail and the server's backlog (600 ms at most,
+    /// <see cref="RecordingTail"/>) and one 50 ms read; past this, the capture
+    /// thread is stuck.
+    /// </summary>
     private static readonly TimeSpan RecorderStopTimeout = TimeSpan.FromSeconds(2);
 
     /// <summary>
@@ -91,6 +105,9 @@ public sealed class DictationDaemon : IDisposable
     private readonly SessionGuard _guard;
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
+    /// <summary>The <c>threads</c> setting resolved: 0 became one per physical core.</summary>
+    private readonly int _threads;
+
     private Timer? _sessionPoll;
 
     /// <summary>The segments in flight, each chained behind the previous one.</summary>
@@ -98,6 +115,15 @@ public sealed class DictationDaemon : IDisposable
 
     /// <summary>Segments seen so far in the current dictation.</summary>
     private int _segmentCount;
+
+    /// <summary>Stitches the segments of the current dictation back together.</summary>
+    private SegmentJoiner _joiner = new();
+
+    /// <summary>
+    /// The generation whose microphone is reading its tail after the release,
+    /// or 0. A release and the ceiling can both land during the tail.
+    /// </summary>
+    private int _endingGeneration;
 
     /// <summary>The coordinator's generation of the current dictation.</summary>
     private int _generation;
@@ -153,16 +179,20 @@ public sealed class DictationDaemon : IDisposable
         }
 
         _injector = new TextInjector(_uinput, _log.Write);
+        _threads = DecodingThreads.Resolve(settings.Threads);
 
         _engines = new EngineHost(
             modelPath,
             settings.Provider,
-            settings.Threads,
+            _threads,
             settings.FrenchSpacing,
             IdlePolicy.FromMinutes(settings.UnloadAfterMinutes),
             log);
 
-        _recorder = new AudioRecorder(RecordingGuards.From(settings), settings.SegmentPause());
+        _recorder = new AudioRecorder(
+            RecordingGuards.From(settings),
+            settings.SegmentPause(),
+            settings.SegmentPause() > TimeSpan.Zero ? CreateSpeechDetectors(modelPath) : null);
         _recorder.SegmentReady += (_, segment) => _loop.Post(() => OnSegmentReady(segment));
         _recorder.MaximumReached += (_, recording) => _loop.Post(() => OnMaximumReached(recording));
         _recorder.CaptureLost += (_, recording) => _loop.Post(() => OnCaptureLost(recording));
@@ -285,7 +315,7 @@ public sealed class DictationDaemon : IDisposable
                 _log.Write("model checked, loading deferred to the first dictation");
             }
 
-            _log.Write($"ready ({_settings.Provider}, {_settings.Threads} threads)");
+            _log.Write($"ready ({_settings.Provider}, {_threads} threads)");
             _coordinator.MarkReady();
         }
         catch (Exception ex)
@@ -296,6 +326,63 @@ public sealed class DictationDaemon : IDisposable
             _log.Write($"model loading failed: {ex.GetType().Name}: {ex.Message}");
             _coordinator.MarkFailed();
             Notify("Model unusable", "The speech model is missing or damaged. Run get-model.sh again, then restart HexLinux.");
+        }
+    }
+
+    /// <summary>
+    /// Silero VAD when its model sits next to the engine's folder, as
+    /// get-model.sh installs it; the level threshold otherwise (null), which
+    /// was the only detector before and still works in a quiet room. Only
+    /// called when segmentation is on: without it, nothing asks for a
+    /// verdict, and the model would take memory for nothing.
+    /// </summary>
+    private DetectorPool? CreateSpeechDetectors(string modelPath)
+    {
+        if (string.IsNullOrWhiteSpace(modelPath))
+        {
+            return null;
+        }
+
+        string file = SileroModel.PathFor(modelPath);
+        ISpeechDetector? first = TryCreateSilero(file);
+
+        if (first is null)
+        {
+            return null;
+        }
+
+        _log.Write("pauses found by Silero VAD");
+
+        // A second detector is only made when two recordings overlap; if that
+        // one fails, the recording falls back to the level rather than crash
+        // the capture thread.
+        return new DetectorPool(() => TryCreateSilero(file) ?? new LevelSpeechDetector(), first);
+    }
+
+    /// <summary>
+    /// A Silero detector, or null after a log line. The file is read whole
+    /// and checked every time, before sherpa-onnx sees it: one that is not the
+    /// model aborts the process (see <see cref="SileroModel"/>).
+    /// </summary>
+    private ISpeechDetector? TryCreateSilero(string file)
+    {
+        try
+        {
+            if (SileroModel.Problem(File.Exists(file) ? File.ReadAllBytes(file) : null) is { } problem)
+            {
+                _log.Write($"speech detector {problem} ({file}): pauses found by the sound level");
+                return null;
+            }
+
+            return new SileroSpeechDetector(file);
+        }
+        catch (Exception ex)
+        {
+            // Deliberately broad: this may run on a capture thread, where an
+            // escaping exception would end the daemon — an unreadable file,
+            // hashing unavailable, the native library missing.
+            _log.Write($"speech detector not loaded ({ex.GetType().Name}: {ex.Message}): pauses found by the sound level");
+            return null;
         }
     }
 
@@ -433,6 +520,7 @@ public sealed class DictationDaemon : IDisposable
         _activeRecording = recording;
         _generation = _coordinator.Generation;
         _segmentCount = 0;
+        _joiner = new SegmentJoiner();
 
         // A chain left completed — faulted or not — starts afresh. One still
         // running, from a cancelled dictation, is kept: the new segments wait
@@ -483,22 +571,28 @@ public sealed class DictationDaemon : IDisposable
 
     private void OnDictationEnded()
     {
-        if (!_coordinator.TryStartTranscribing())
+        if (_coordinator.State != DictationState.Recording || _endingGeneration == _generation)
         {
             return;
         }
 
-        _ = EndAsync(_generation);
+        _ = EndDictationAsync(_generation);
     }
 
-    private async Task EndAsync(int generation)
+    /// <summary>
+    /// The release: the microphone reads its tail first, the state staying on
+    /// Recording meanwhile — the end tone is played on leaving it, and through
+    /// speakers it would otherwise be recorded over the last word.
+    /// </summary>
+    private async Task EndDictationAsync(int generation)
     {
-        // Null when the press was too brief, or when what is left after the
-        // last pause holds no speech.
+        _endingGeneration = generation;
         RecordedAudio? remainder;
 
         try
         {
+            // Null when the press was too brief, or when what is left after
+            // the last pause holds no speech.
             remainder = await _recorder.StopAsync().WaitAsync(RecorderStopTimeout).ConfigureAwait(true);
         }
         catch (TimeoutException)
@@ -510,13 +604,27 @@ public sealed class DictationDaemon : IDisposable
             Notify("Microphone not responding", "The end of the dictation was lost. Run hexlinux --doctor if it happens again.");
             remainder = null;
         }
+        finally
+        {
+            if (_endingGeneration == generation)
+            {
+                _endingGeneration = 0;
+            }
+        }
+
+        // False when the dictation was cancelled during the tail — and a new
+        // one may even have started since, which this must not end.
+        if (generation != _coordinator.Generation || !_coordinator.TryStartTranscribing())
+        {
+            return;
+        }
 
         if (remainder is { } audio)
         {
             Enqueue(audio, generation, final: true);
         }
 
-        await FinishAsync(generation).ConfigureAwait(true);
+        await FinishAsync(generation, _joiner, keepText: true).ConfigureAwait(true);
     }
 
     private void OnDictationCancelled()
@@ -527,7 +635,7 @@ public sealed class DictationDaemon : IDisposable
         {
             _recorder.Discard();
             _log.Write("dictation cancelled");
-            _ = FinishAsync(generation);
+            _ = FinishAsync(generation, _joiner, keepText: false);
         }
     }
 
@@ -544,10 +652,16 @@ public sealed class DictationDaemon : IDisposable
         // is played; the arming time comes first.
         TimeSpan lead = _feedback.PlaysTone && ordinal == 1 ? _armedFor + CueLead : TimeSpan.Zero;
 
-        _segments = TranscribeAfterAsync(_segments, audio, ordinal, generation, lead, final);
+        // The joiner is taken now: a segment of a cancelled dictation still
+        // being transcribed when the next one starts must not touch the new
+        // one's.
+        _segments = TranscribeAfterAsync(_segments, new Segment(audio, ordinal, generation, lead, final, _joiner));
     }
 
-    private async Task TranscribeAfterAsync(Task previous, RecordedAudio audio, int ordinal, int generation, TimeSpan lead, bool final)
+    /// <summary>One segment of a dictation, with everything its transcription needs.</summary>
+    private sealed record Segment(RecordedAudio Audio, int Ordinal, int Generation, TimeSpan Lead, bool Final, SegmentJoiner Joiner);
+
+    private async Task TranscribeAfterAsync(Task previous, Segment segment)
     {
         try
         {
@@ -558,14 +672,20 @@ public sealed class DictationDaemon : IDisposable
             // Already logged by the segment that failed; this one still runs.
         }
 
-        await TranscribeAsync(audio, ordinal, generation, lead, final).ConfigureAwait(true);
+        await TranscribeAsync(segment).ConfigureAwait(true);
     }
 
     /// <summary>
     /// Waits for every segment to be inserted, then puts the daemon back to
     /// rest — unless another dictation has begun since.
     /// </summary>
-    private async Task FinishAsync(int generation)
+    /// <param name="generation">The dictation that is over.</param>
+    /// <param name="joiner">Its joiner, which may still hold a full stop.</param>
+    /// <param name="keepText">
+    /// False for a cancelled dictation: the full stop the joiner may still
+    /// hold is not inserted after text the user abandoned.
+    /// </param>
+    private async Task FinishAsync(int generation, SegmentJoiner joiner, bool keepText)
     {
         // A segment closed in the last instants of the recording may still be
         // on its way to the loop. Yielding once lets it join the chain before
@@ -575,10 +695,18 @@ public sealed class DictationDaemon : IDisposable
         try
         {
             await _segments.ConfigureAwait(true);
+
+            // Held back from a segment in case the next one continued its
+            // sentence; the dictation ended on a pause instead.
+            if (keepText && _coordinator.MayInsert(generation) && joiner.Finish() is { Length: > 0 } held)
+            {
+                await InsertAsync(new SegmentInsertion(0, held), generation, final: true, joiner).ConfigureAwait(true);
+            }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Every segment logs its own failure.
+            // Every segment logs its own failure; this is the held full stop's.
+            _log.Write($"end of dictation failed: {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
@@ -591,8 +719,10 @@ public sealed class DictationDaemon : IDisposable
         }
     }
 
-    private async Task TranscribeAsync(RecordedAudio audio, int ordinal, int generation, TimeSpan lead, bool final)
+    private async Task TranscribeAsync(Segment segment)
     {
+        (RecordedAudio audio, int ordinal, int generation, TimeSpan lead, bool final, SegmentJoiner joiner) = segment;
+
         try
         {
             if (!_coordinator.MayInsert(generation))
@@ -615,27 +745,59 @@ public sealed class DictationDaemon : IDisposable
                 _log.Write(nothing);
             }
 
-            string text = InsertionText.ForSegment(result.Text, ordinal);
+            // Made safe first, so that what the joiner counts is exactly what
+            // reaches the document; the joiner then puts the spaces between
+            // segments itself.
+            string text = InsertionText.Sanitize(result.Text);
 
-            if (text.Length == 0)
+            if (text.Length == 0 || !_coordinator.MayInsert(generation))
             {
                 return;
             }
 
-            await InsertAsync(text, generation, final).ConfigureAwait(true);
+            // An erase of a sentence already typed waits for the modifiers
+            // to be let go: with Ctrl, each Backspace would take a word. If
+            // one stays held, the joiner is told before it decides, so that
+            // it keeps that sentence and joins the rest after it.
+            if (joiner.PendingErase(text) > 0 && !await WaitToEraseAsync(generation).ConfigureAwait(true))
+            {
+                if (!_coordinator.MayInsert(generation))
+                {
+                    return;
+                }
+
+                joiner.Invalidate();
+                _log.Write("not erased: a modifier was still held");
+                Notify("Not erased", "The sentence to erase was left as it was: release every key before saying the erase command.");
+            }
+
+            SegmentInsertion insertion = joiner.Next(text, isLast: final);
+
+            if (insertion.Erase > 0 || insertion.Text.Length > 0)
+            {
+                await InsertAsync(insertion, generation, final, joiner).ConfigureAwait(true);
+            }
         }
         catch (Exception ex)
         {
             // Deliberately broad. Whatever escapes here — a tool gone, a
             // native failure — must cost this segment only: an exception left
             // in the chain would make every later dictation fail in silence.
-            // The type and the message only, never the text.
+            // The type and the message only, never the text. What reached the
+            // document is unknown now: nothing more is erased.
+            joiner.Invalidate();
             _log.Write($"segment {ordinal} failed: {ex.GetType().Name}: {ex.Message}");
             Notify("Dictation failed", "A dictation could not be transcribed or inserted. The log has the details.");
         }
     }
 
-    private async Task InsertAsync(string text, int generation, bool final)
+    /// <summary>
+    /// Carries out what the joiner decided for one segment: the Backspaces of
+    /// a spoken erase first, then the text. Whatever does not reach the
+    /// document makes the joiner stop erasing (<see cref="SegmentJoiner.Invalidate"/>):
+    /// its count would no longer match what is there.
+    /// </summary>
+    private async Task InsertAsync(SegmentInsertion insertion, int generation, bool final, SegmentJoiner joiner)
     {
         if (final)
         {
@@ -646,6 +808,7 @@ public sealed class DictationDaemon : IDisposable
 
         if (!guard.Allowed)
         {
+            joiner.Invalidate();
             _log.Write($"not inserted: {guard.Reason}");
             Notify("Dictation not inserted", "The session was locked, not in front, or could not be checked.");
             return;
@@ -666,7 +829,43 @@ public sealed class DictationDaemon : IDisposable
             await Task.Run(() => _injector.Survey(_session)).ConfigureAwait(true);
 
         InjectionPlan plan = InjectionPlanner.Plan(_settings.Insertion, _settings.KeySender, _settings.ClipboardFallback, context);
-        InsertionResult inserted = await _injector.InsertAsync(text, plan, _settings.PasteShortcut, tools, sessionRefusal).ConfigureAwait(true);
+        // The modifiers were let go before the joiner decided (TranscribeAsync).
+        if (insertion.Erase > 0)
+        {
+            InsertionResult erased = await _injector.EraseAsync(insertion.Erase, plan, tools, sessionRefusal).ConfigureAwait(true);
+
+            // The count only, never what it erases.
+            if (erased.Status == InsertionStatus.Inserted)
+            {
+                _log.Write($"  -> {insertion.Erase} characters erased on request");
+            }
+            else
+            {
+                joiner.Invalidate();
+                _log.Write($"not erased ({insertion.Erase} characters): {erased.Problem}");
+
+                if (erased.Status == InsertionStatus.Refused)
+                {
+                    // Locked meanwhile: the text must not go in either.
+                    Notify("Dictation not inserted", "The session was locked, not in front, or could not be checked.");
+                    return;
+                }
+
+                Notify("Not erased", "The sentence to erase was left as it was: nothing could send Backspace. Run hexlinux --doctor.");
+            }
+        }
+
+        if (insertion.Text.Length == 0)
+        {
+            return;
+        }
+
+        InsertionResult inserted = await _injector.InsertAsync(insertion.Text, plan, _settings.PasteShortcut, tools, sessionRefusal).ConfigureAwait(true);
+
+        if (inserted.Status != InsertionStatus.Inserted)
+        {
+            joiner.Invalidate();
+        }
 
         switch (inserted.Status)
         {
@@ -714,6 +913,40 @@ public sealed class DictationDaemon : IDisposable
 
             await Task.Delay(ModifierGuard.PollInterval).ConfigureAwait(true);
         }
+    }
+
+    /// <summary>
+    /// Waits until no modifier is held on the physical keyboards, so that the
+    /// Backspaces erase characters, not words (see <see cref="EraseGuard"/>).
+    /// False when the dictation was cancelled meanwhile, or a modifier stayed
+    /// held too long after it.
+    /// </summary>
+    private async Task<bool> WaitToEraseAsync(int generation)
+    {
+        var sinceRecording = new Stopwatch();
+
+        while (_coordinator.MayInsert(generation))
+        {
+            bool recording = _coordinator.State == DictationState.Recording && generation == _coordinator.Generation;
+
+            if (!recording && !sinceRecording.IsRunning)
+            {
+                sinceRecording.Start();
+            }
+
+            switch (EraseGuard.Decide(_tracker.HeldModifiers(), recording, sinceRecording.Elapsed))
+            {
+                case EraseDecision.Erase:
+                    return true;
+                case EraseDecision.GiveUp:
+                    return false;
+                default:
+                    await Task.Delay(ModifierGuard.PollInterval).ConfigureAwait(true);
+                    break;
+            }
+        }
+
+        return false;
     }
 
     private void DiscardIfCurrent(int recording)

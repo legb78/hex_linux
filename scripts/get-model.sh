@@ -21,11 +21,13 @@
 # engine needs are extracted, and the finished folder is moved into place in
 # one rename. A dropped connection, a corrupt download or an archive changed
 # upstream therefore installs nothing and leaves an existing model untouched.
+# The speech detector that finds the pauses (silero_vad.onnx) is fetched
+# alongside, under the same checks.
 
 set -euo pipefail
 
 usage() {
-  sed -n '3,23p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 model="parakeet-v3"
@@ -117,11 +119,67 @@ if [ "$(id -u)" -eq 0 ]; then
   echo "         Run this as the user who dictates unless that is what you want." >&2
 fi
 
+# Silero VAD finds the pauses of a dictation inserted sentence by sentence
+# ("segmentation": true), next to the model where HexLinux looks for it. 630 KB,
+# fetched before the model check below: an installation made before the
+# detector existed gets it too, without downloading the model again. Same
+# safety as the model: HTTPS only, an unpredictable temporary file in the same
+# folder, size and SHA-256 checked before it is renamed into place. Its values
+# come from the GitHub API for the same asr-models release (asset digest,
+# uploaded 2025-07-11) and were recomputed from a full download.
+#
+# A failure here does not stop the model from being installed: HexLinux then
+# finds the pauses by the sound level, as before the detector existed. The
+# script still exits with 1, so that it does not pass unnoticed.
+vad_name="silero_vad.onnx"
+vad_size=643854
+vad_sha256=9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6
+vad_url="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/$vad_name"
+vad_file="$dest_parent/$vad_name"
+vad_status=0
+vad_part=""
+
+fetch_vad() {
+  mkdir -p -- "$dest_parent"
+  vad_part="$(mktemp -- "$dest_parent/.silero_vad.XXXXXXXX")"
+  # The EXIT trap of the model download, set further down, replaces this one:
+  # by then this temporary file is gone either way.
+  trap 'rm -f -- "$vad_part"' EXIT
+
+  echo "Detector    : $vad_name, $((vad_size / 1024)) KB to download"
+  if ! curl --fail --location --proto '=https' --proto-redir '=https' --retry 3 \
+      --silent --show-error --output "$vad_part" -- "$vad_url"; then
+    echo "The speech detector could not be downloaded." >&2
+  elif [ "$(stat -c %s -- "$vad_part")" != "$vad_size" ]; then
+    echo "Speech detector size mismatch: $(stat -c %s -- "$vad_part") bytes received, $vad_size expected." >&2
+  elif ! printf '%s  %s\n' "$vad_sha256" "$vad_part" | sha256sum --check --status; then
+    echo "Speech detector SHA-256 mismatch: the upstream file changed or the download is corrupt." >&2
+  else
+    # mktemp creates the file readable by its owner only; the model files get
+    # the usual permissions, so does this one.
+    chmod 0644 -- "$vad_part"
+    mv -f -- "$vad_part" "$vad_file"
+    trap - EXIT
+    return 0
+  fi
+
+  rm -f -- "$vad_part"
+  trap - EXIT
+  echo "Nothing was installed for it: HexLinux will find the pauses by the sound level." >&2
+  return 1
+}
+
+if [ -f "$vad_file" ] && [ ! -L "$vad_file" ] && [ "$(stat -c %s -- "$vad_file")" = "$vad_size" ] && [ "$force" -eq 0 ]; then
+  echo "Detector    : $vad_name already present"
+elif ! fetch_vad; then
+  vad_status=1
+fi
+
 if [ -e "$destination" ] && [ "$force" -eq 0 ]; then
   if complete "$destination"; then
     echo "Already present and complete, nothing to do."
     echo "Use --force to download again."
-    exit 0
+    exit "$vad_status"
   fi
   echo "Present but incomplete: downloading again." >&2
 fi
@@ -197,3 +255,4 @@ echo ""
 echo "Check the transcription chain with:"
 echo "  hexlinux --doctor"
 echo "  hexlinux --transcribe my-recording.wav"
+exit "$vad_status"
