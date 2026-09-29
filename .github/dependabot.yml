@@ -1,8 +1,9 @@
 version: 2
 
 # Both ecosystems target develop, like any other change, and their commit
-# prefixes are Conventional Commits: the "Conventional commits" check requires
-# it, and accepts Dependabot's capitalised "Bump" as it comes.
+# prefixes are Conventional Commits: the "Conventional commits" check looks for
+# them, and accepts Dependabot's capitalised "Bump" as it comes (Dependabot
+# adds the colon after a prefix ending in a parenthesis).
 
 updates:
   # NuGet dependencies

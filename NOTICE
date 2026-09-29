@@ -118,6 +118,9 @@ Programs HexLinux runs as separate processes, when they are installed:
   xdotool                           BSD-3-Clause       keystrokes, X11
   wtype                             MIT (Expat)        keystrokes, wlroots Wayland
   loginctl (systemd)                LGPL-2.1-or-later  session state
+  localectl (systemd)               LGPL-2.1-or-later  keyboard layout, --doctor
+  gsettings (GLib)                  LGPL-2.1-or-later  keyboard layout under
+                                                       GNOME, --doctor
   xdg-open (xdg-utils)              MIT (Expat)        opening the settings file
                                                        and the log folder
   notify-send (libnotify)           LGPL-2.1-or-later  notifications, when the

@@ -203,8 +203,9 @@ pressed while the shortcut is held — keeps the pieces already inserted.
 ## Settings
 
 `~/.config/hexlinux/settings.json` (or under `$XDG_CONFIG_HOME`). On the first
-start, the commented `settings.json` shipped next to the executable is copied
-there, comments included; an existing file is never overwritten. Comments are
+start, the commented default file — the `settings.json` shipped next to the
+executable, also built into it so that the executable alone is enough — is
+copied there, comments included; an existing file is never overwritten. Comments are
 allowed, and **an invalid value falls back to its own default** — the other
 settings of the file are kept — rather than preventing startup.
 
@@ -354,7 +355,7 @@ The architecture deliberately separates two layers, for testability:
 flowchart LR
   subgraph shells["Shells: system calls, no decisions, checked by hand"]
     keyboard["EvdevKeyboard<br/>/dev/input"]
-    socket["ControlSocket<br/>hexlinux --toggle"]
+    socket["ControlServer<br/>hexlinux --toggle"]
     mic["AudioRecorder<br/>libpulse-simple"]
     engine["ParakeetEngine<br/>sherpa-onnx"]
     injector["TextInjector, UinputKeyboard<br/>clipboard tools, xdotool, wtype, /dev/uinput"]
@@ -399,7 +400,8 @@ Two long-lived branches:
 One branch per change, created **from `develop`** and merged back into it:
 `feat/`, `fix/`, `chore/`, `ci/`, `docs/`. Messages follow
 [Conventional Commits](https://www.conventionalcommits.org/), squash-merged; a
-check enforces it on the pull request title.
+CI check verifies the pull request title (it warns, the build check is the one
+that blocks).
 
 ```sh
 git checkout develop
@@ -413,7 +415,8 @@ Full details in [CONTRIBUTING.md](CONTRIBUTING.md).
 ### Publishing a release
 
 ```sh
-scripts/publish.sh          # builds the self-contained executable locally
+scripts/publish.sh            # builds the self-contained executable locally
+scripts/publish.sh --archive  # and the same tarball as a release
 ```
 
 `Directory.Build.props` holds `<Version>` and is the single source of truth.

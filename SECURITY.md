@@ -12,6 +12,11 @@ is supported. Fixes go out as a new version; older ones are not patched.
 in the Security tab. The report stays private between you and the maintainer
 until a fix ships.
 
+That button exists only while private vulnerability reporting is switched on
+for the repository, a setting its owner controls. If the Security tab does not
+offer it, open an issue that asks for a private channel and says nothing about
+the problem itself.
+
 Expect a first reply within a week. This is a one-person project run on spare
 time, so there is no bounty and no guaranteed turnaround — but a real report
 will be taken seriously, and you will be credited in the advisory unless you
@@ -135,12 +140,16 @@ present but cannot be read, insertion is refused.
   and nothing is installed: the pinned values have to be updated in the script,
   in a reviewed change. A mismatch is a stop, never a warning.
 - **`install-udev-rules.sh`** runs as root. It writes fixed content to
-  `/etc/udev/rules.d` — shown before it is installed — and removes it again with
-  `--uninstall`.
+  `/etc/udev/rules.d` (and, with `--with-uinput`, to `/etc/modules-load.d`) —
+  shown before it is installed, and checked line by line against the rules
+  written in the script itself — and removes it again with `--uninstall`.
 - **The release** is built by CI from `main`, after the unit tests pass again.
   The job that builds has a read-only token; the job that publishes holds the
-  only write token, runs no code from the repository, and uses no third-party
-  action. Release tags cannot be moved or deleted. Check what you download:
+  only write token, runs no code from the repository, and uses no action from
+  outside GitHub's own. The workflow never moves or deletes a published tag;
+  the rulesets in force do not forbid an administrator to, though — a tag
+  ruleset is ready in `.github/rulesets/optional/`, not applied. Check what
+  you download:
 
   ```sh
   sha256sum -c SHA256SUMS
@@ -151,9 +160,19 @@ present but cannot be read, insertion is refused.
   uploaded, which does not depend on the files of the release page.
 
 The branch rules allow no bypass: nobody, the owner included, can push to
-`main` or `develop` directly or merge without green checks. That protects
-against mistakes and against other collaborators — not against the owner's own
-account or token being stolen, since an administrator can change the rules.
+`main` or `develop` directly or merge without the green build check. That
+protects against mistakes and against other collaborators — not against the
+owner's own account or token being stolen, since an administrator can change
+the rules.
+
+### What GitHub scans, and what it does not
+
+GitHub's secret scanning and its push protection are free on a public
+repository, but switched off here, as on the Windows sibling:
+`scripts/apply-rulesets.sh` shows their state, and `--enable-secret-scanning`
+turns them on. Dependabot alerts and security updates, on in the Windows
+sibling, are part of what the same script applies by default. CI refuses a
+dependency with a known vulnerability either way.
 
 ## What is worth reporting
 
