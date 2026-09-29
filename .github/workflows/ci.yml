@@ -129,10 +129,10 @@ jobs:
 
   # The commit convention, enforced rather than hoped for, on what a squash
   # merge actually writes: the pull request title, and the subject of its
-  # commit when it has only one (the squash title is COMMIT_OR_PR_TITLE). The
-  # subjects of a pull request with several commits are reported without
-  # failing — a squash only lists them — and merge commits written by "Update
-  # branch" are left out. On a push to develop, every commit that landed is
+  # commit when it has only one (the squash title is COMMIT_OR_PR_TITLE) —
+  # merges written by "Update branch" aside. The subjects of a pull request
+  # with several commits of its own are reported without failing: a squash
+  # only lists them. On a push to develop, every commit that landed is
   # checked: that is where a squash title edited by hand in the merge dialog,
   # or a rebase merge, would show. The job runs on both events instead of
   # being skipped on pushes, for the reason given above: a skipped job would
@@ -154,10 +154,12 @@ jobs:
       # Passed through the environment and quoted by the script, never
       # interpolated into it: ${{ }} is substituted textually before bash sees
       # it, and a pull request title is text anyone can write — a title of
-      # `x"; curl … | bash; #` would otherwise run as written. The script never
-      # prints a title or a subject at the start of a line, and replaces their
-      # control characters: a line starting with "::" is a command to the
-      # runner.
+      # `x"; curl … | bash; #` would otherwise run as written. What the step
+      # prints is just as much a way in: the runner takes "::command::" at the
+      # start of a line, and "##[command]" anywhere in one, as orders. The
+      # script prints the titles and subjects with those commands stopped
+      # under a random token (::stop-commands::), and with their control
+      # characters replaced.
       - name: Title and commit subjects
         env:
           EVENT_NAME: ${{ github.event_name }}

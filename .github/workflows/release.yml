@@ -26,6 +26,13 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# One release run at a time, queued rather than cancelled: two merges in quick
+# succession must not both decide that the same version is new, and a
+# publication must never be interrupted halfway.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 # The write-capable token is granted to the publishing job only.
 permissions:
   contents: read
@@ -52,14 +59,15 @@ jobs:
       # request author can edit, and it ends up in a shell command below — a
       # version of `1.0.1"; curl … | bash; #` would otherwise run as written.
       # Refusing anything that is not three plain numbers closes that off at
-      # the source.
+      # the source. A refused value is not printed back: the log would read it
+      # as workflow commands.
       - name: Read the version
         id: read
         run: |
           version=$(grep -oPm1 '(?<=<Version>)[^<]+' Directory.Build.props)
 
           if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Refusing a version that is not MAJOR.MINOR.PATCH: '$version'" >&2
+            echo "Refusing the <Version> of Directory.Build.props: it is not MAJOR.MINOR.PATCH." >&2
             exit 1
           fi
 
@@ -69,12 +77,20 @@ jobs:
       # Passed through the environment and quoted, never interpolated straight
       # into the script: ${{ }} is substituted textually before bash sees it,
       # so anything inside it would be read as shell.
+      #
+      # A manual run can be started on any branch; a release is only ever cut
+      # from main, so anything else publishes nothing. The tag is looked up
+      # under refs/tags/ precisely, so that a branch of the same name cannot
+      # pass for it.
       - name: Does the tag already exist?
         id: decide
         env:
           VERSION: ${{ steps.read.outputs.version }}
         run: |
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Releases are published from main only, and this run is on $GITHUB_REF: nothing to do."
+          elif git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "v$VERSION is already published, nothing to do."
           else
@@ -124,24 +140,43 @@ jobs:
       # would meet is "Permission denied". The modes are set explicitly with
       # install rather than trusted to the checkout, and the listing shows them
       # in the log. A missing file fails the step: no release with a hole in it.
+      #
+      # The udev rules and the module list come as the whole packaging/ folder,
+      # laid out as in the repository: its content belongs to the installer
+      # script, which reads it, and the archive must not second-guess it.
+      #
+      # Every entry is recorded as owned by root, by number. tar run as root
+      # restores the owner an archive records, and the runner's own user ID
+      # could belong to anyone on the machine that extracts it — a user who
+      # would then own the files root is about to install. Extracted by anyone
+      # else, the files belong to whoever extracts them, as usual.
       - name: Assemble the archive
         run: |
           root=package/hexlinux
-          mkdir -p "$root/packaging/udev" "$root/packaging/modules-load.d"
+          mkdir -p "$root"
 
           install -m 0755 publish/hexlinux "$root/"
           install -m 0644 publish/settings.json "$root/"
           install -m 0755 scripts/get-model.sh scripts/install-udev-rules.sh "$root/"
-          install -m 0644 packaging/udev/70-hexlinux.rules "$root/packaging/udev/"
-          install -m 0644 packaging/modules-load.d/hexlinux.conf "$root/packaging/modules-load.d/"
           install -m 0644 README.md LICENSE NOTICE "$root/"
 
-          tar -czf hexlinux-linux-x64.tar.gz -C package hexlinux
+          if ! find packaging -type f -name '*.rules' | grep -q .; then
+            echo "::error::No udev rule under packaging/: the installer would have nothing to install."
+            exit 1
+          fi
+          cp -R packaging "$root/"
+          find "$root/packaging" -type d -exec chmod 0755 {} +
+          find "$root/packaging" -type f -exec chmod 0644 {} +
+
+          tar -czf hexlinux-linux-x64.tar.gz --owner=0 --group=0 --numeric-owner -C package hexlinux
           tar -tvzf hexlinux-linux-x64.tar.gz
 
           sha256sum hexlinux-linux-x64.tar.gz > SHA256SUMS
           cat SHA256SUMS
 
+      # The tarball travels as it is: an artifact keeps no file modes (the
+      # upload-artifact documentation, "Permission Loss"), the tarball inside
+      # it does.
       - name: Hand the archive to the publishing job
         uses: actions/upload-artifact@v7
         with:
@@ -177,7 +212,8 @@ jobs:
       # The tag is created on the very commit that was built and tested
       # (GITHUB_SHA), not on whatever main points at by then. The notes below
       # are prepended to the ones GitHub generates from the merged pull
-      # requests. The token is given to this step alone.
+      # requests. The token is given to this step alone, and the GitHub CLI
+      # that uses it is the one GitHub installs on its Ubuntu runner images.
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -207,11 +243,14 @@ jobs:
              ./hexlinux
              ```
 
-          Dictating by **holding right `Ctrl`** needs read access to the
-          keyboards: `sudo ./install-udev-rules.sh`, then log out and back in.
-          That permission lets any program you run read everything you type; the
-          README explains the trade-off, and the way to dictate without any
-          permission: bind `hexlinux --toggle` to a shortcut of your desktop.
+          Dictating by **holding right `Ctrl`** needs access to the keyboards:
+          `sudo ./install-udev-rules.sh`, then log out and back in. That
+          permission lets any program you run read everything you type, and
+          inject keystrokes. Under GNOME or KDE on Wayland, pasting also needs
+          the virtual keyboard: `--with-uinput`, which lets any of your programs
+          type anywhere. The README explains the trade-off, and the way to
+          dictate without any permission: bind `hexlinux --toggle` to a
+          shortcut of your desktop.
 
           The clipboard and keystroke tools come from your distribution
           (`wl-clipboard` or `xclip`, `xdotool` or `wtype`): `--doctor` names

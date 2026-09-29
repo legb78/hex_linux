@@ -26,11 +26,18 @@
 # they have now landed — a squash title edited by hand in the merge dialog
 # shows up there, as would the commits of a rebase merge.
 #
-# Merge commits are never checked on their own. The branch rules require a
-# pull request to be up to date with its base before it merges, so "Update
-# branch" is routine, and that button writes "Merge branch 'develop' into ..."
-# — a subject nobody chose. They still count in the number of commits, as
-# they do for GitHub when it picks the squash title.
+# Merge commits are left out. The branch rules require a pull request to be up
+# to date with its base before it merges, so "Update branch" is routine, and
+# that button writes "Merge branch 'develop' into ..." — a subject nobody
+# chose. Whether GitHub counts such a merge when it decides between the commit
+# subject and the title is not documented, so a pull request made of one
+# commit plus merges has both that subject and its title checked: whichever
+# the squash takes, it has been verified.
+#
+# In GitHub Actions, the output runs with the runner's workflow commands
+# stopped (::stop-commands:: and a random token): the runner still honours an
+# old "##[command]" form anywhere in a line, and a title or a subject is text
+# anyone can write. They are resumed for this script's own annotations only.
 #
 # Why this exists at all: the Windows sibling of this project follows the same
 # convention by hand, and a pull request titled after its branch, "Feat/recording
@@ -72,10 +79,47 @@ checked=0
 failures=0
 notes=0
 
+# --- Workflow commands --------------------------------------------------------
+#
+# The runner reads its commands from what a step prints: a line starting with
+# "::" (after spaces), and, in the older form, "##[command]" anywhere in a line
+# (actions/runner, ActionCommand.TryParse searches the whole line). Printing a
+# subject away from the start of a line is therefore not enough on its own.
+# ::stop-commands:: makes the runner ignore both forms until it sees the token
+# again; the token is random, so a title written in advance cannot guess it.
+
+stop_token=""
+
+stop_commands() {
+  [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
+  [ -z "$stop_token" ] || return 0
+
+  stop_token=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+  [ "${#stop_token}" -eq 32 ] || { printf 'Cannot draw a random token from /dev/urandom.\n' >&2; exit 70; }
+
+  printf '::stop-commands::%s\n' "$stop_token"
+}
+
+resume_commands() {
+  [ -n "$stop_token" ] || return 0
+
+  printf '::%s::\n' "$stop_token"
+  stop_token=""
+}
+
+# Whatever happens, the commands of the steps that follow stay honoured.
+trap resume_commands EXIT
+
 usage_error() {
   printf '%s\n' "$1" >&2
   printf 'See: %s --help\n' "$0" >&2
   exit 64
+}
+
+# BASE_SHA and HEAD_SHA name commits: hexadecimal, nothing else. Checking it
+# here keeps them from ever being read by git as an option.
+require_object_name() {
+  [[ "$2" =~ ^[0-9a-f]{7,64}$ ]] || usage_error "$1 must be a commit hash."
 }
 
 conforms() {
@@ -83,8 +127,8 @@ conforms() {
 }
 
 # Prints one verdict. A subject is never printed at the start of a line, and
-# its control characters are replaced: in GitHub Actions a line starting with
-# "::" is a command to the runner, and a subject is text anyone can write.
+# its control characters are replaced, so that it cannot forge a line of its
+# own either; in GitHub Actions, the commands are stopped around it as well.
 #
 #   check error|note <what> <subject>
 check() {
@@ -138,11 +182,30 @@ check_commits() {
   done <<< "$log"
 }
 
+#   count_commits <range> [--no-merges]
 count_commits() {
-  if ! git rev-list --count --end-of-options "$1"; then
-    printf 'Cannot count the commits of %s.\n' "$1" >&2
+  local range="$1"
+  shift
+
+  if ! git rev-list --count "$@" --end-of-options "$range"; then
+    printf 'Cannot count the commits of %s.\n' "$range" >&2
     printf 'In CI, the checkout needs the whole history: fetch-depth: 0.\n' >&2
     exit 65
+  fi
+}
+
+# The base to compare a pull request with. In CI the checkout is GitHub's test
+# merge of the head into the base: when HEAD is that merge, its first parent is
+# the base as GitHub merged it, and the commits of the pull request are exactly
+# the ones between it and the head. BASE_SHA, recorded in the event, is kept
+# for any other checkout.
+pull_request_base() {
+  local base="$1" head="$2" second
+
+  if second=$(git rev-parse -q --verify 'HEAD^2' 2>/dev/null) && [ "$second" = "$(git rev-parse -q --verify "$head^{commit}" 2>/dev/null)" ]; then
+    git rev-parse 'HEAD^1'
+  else
+    printf '%s\n' "$base"
   fi
 }
 
@@ -150,20 +213,24 @@ check_pull_request() {
   local title="$1" base="$2" head="$3"
 
   [ -n "$title" ] || usage_error "PR_TITLE is empty: a pull request always has a title."
+  require_object_name BASE_SHA "$base"
+  require_object_name HEAD_SHA "$head"
+
+  base=$(pull_request_base "$base" "$head")
 
   printf 'Pull request title (the squash takes it when there are several commits):\n'
   check error "title" "$title"
 
-  if [ -z "$base" ] || [ -z "$head" ]; then
-    usage_error "BASE_SHA and HEAD_SHA are needed for a pull request."
-  fi
-
-  local total
+  local total own
   total=$(count_commits "$base..$head")
+  own=$(count_commits "$base..$head" --no-merges)
 
   if [ "$total" -eq 1 ]; then
     printf '\nIts only commit (the squash takes its subject):\n'
     check_commits error --max-count=1 --end-of-options "$head"
+  elif [ "$own" -eq 1 ]; then
+    printf '\nIts %d commits, one of them not a merge (the squash takes the title, or this subject if the merges are not counted):\n' "$total"
+    check_commits error --no-merges --end-of-options "$base..$head"
   elif [ "$total" -gt 1 ]; then
     printf '\nIts %d commits (merges left out; they would only count if the pull request were rebase-merged):\n' "$total"
     check_commits note --no-merges --end-of-options "$base..$head"
@@ -178,6 +245,9 @@ check_push() {
   if [ -z "$head" ] || [ "$head" = "$no_commit" ]; then
     usage_error "HEAD_SHA is missing."
   fi
+
+  require_object_name HEAD_SHA "$head"
+  [ -z "$base" ] || require_object_name BASE_SHA "$base"
 
   if [ -z "$base" ] || [ "$base" = "$no_commit" ]; then
     # A branch created by this push has no "before" to compare with: its
@@ -211,10 +281,12 @@ while [ "$#" -gt 0 ]; do
       exit 0
       ;;
     *)
-      usage_error "Unknown option: $1"
+      usage_error "Unknown option: ${1//[[:cntrl:]]/?}"
       ;;
   esac
 done
+
+stop_commands
 
 case "$mode" in
   range)
@@ -251,6 +323,10 @@ case "$mode" in
     esac
     ;;
 esac
+
+# Nothing written by anyone else is printed from here on: the annotations
+# below are this script's own, and need the commands back.
+resume_commands
 
 if [ "$notes" -gt 0 ]; then
   printf '\n%d commit subject(s) above do not follow Conventional Commits. A squash\n' "$notes"
