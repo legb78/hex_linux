@@ -198,9 +198,9 @@
     <li><strong>Your audio never touches the disk.</strong> The recording lives in
     memory and is gone the moment the transcription ends.</li>
     <li><strong>The keyboard is watched, not taken.</strong> HexLinux never grabs a
-    keyboard, so every key still reaches your desktop, and it looks at the keys of
-    its shortcut and nothing else. It stores no keystrokes. The code is short and
-    meant to be read:
+    keyboard, so every key still reaches your desktop. Each key is only checked
+    against the shortcut &mdash; another key pressed during a dictation cancels it
+    &mdash; and none is stored. The code is short and meant to be read:
     <a href="https://github.com/legb78/hex_linux/tree/main/src/HexLinux/Input">src/HexLinux/Input</a>.</li>
     <li><strong>Your words stay where you put them.</strong> The log keeps durations,
     sound levels and character counts, never the text. The text is handed to the
@@ -213,14 +213,16 @@
   <h2>Three commands to start</h2>
   <p>Download <code>hexlinux-linux-x64.tar.gz</code> from the
   <a href="https://github.com/legb78/hex_linux/releases/latest">latest release</a>,
-  extract it, then in that folder:</p>
+  extract it, then in the <code>hexlinux</code> folder it creates:</p>
 <pre><code>./get-model.sh      <span class="c"># about 490 MB, once, checked before it is extracted</span>
 ./hexlinux --doctor <span class="c"># what HexLinux can see of your session</span>
 ./hexlinux</code></pre>
   <p>Nothing to install for HexLinux itself &mdash; <strong>not even .NET</strong>,
   which is bundled inside the executable. The clipboard and keystroke tools come from
   your distribution, and <code>--doctor</code> names the ones your session is
-  missing. <code>./hexlinux --autostart on</code> starts it with your session.</p>
+  missing. <code>./hexlinux --autostart on</code> starts it with your session; Sway
+  and Hyprland, which ignore autostart entries, start it from their own
+  configuration.</p>
 </section>
 
 <section>
