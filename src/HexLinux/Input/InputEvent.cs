@@ -36,11 +36,28 @@ public readonly record struct InputEvent(ushort Type, ushort Code, int Value)
     /// <summary><c>SYN_REPORT</c>: closes a group of events.</summary>
     public const ushort SynReport = 0;
 
+    /// <summary>
+    /// <c>SYN_DROPPED</c>: the reader fell behind and the kernel threw events
+    /// away — possibly a release. Everything up to the next
+    /// <see cref="SynReport"/> is unreliable.
+    /// </summary>
+    public const ushort SynDropped = 3;
+
     private const int TypeOffset = 16;
     private const int CodeOffset = 18;
     private const int ValueOffset = 20;
 
     public bool IsKey => Type == Key;
+
+    public bool IsSyncReport => Type == Synchronization && Code == SynReport;
+
+    public bool IsSyncDropped => Type == Synchronization && Code == SynDropped;
+
+    /// <summary>A key event, as a virtual keyboard writes it.</summary>
+    public static InputEvent KeyEvent(int code, bool pressed) => new(Key, checked((ushort)code), pressed ? 1 : 0);
+
+    /// <summary>The <c>SYN_REPORT</c> that makes the preceding events take effect.</summary>
+    public static InputEvent Report() => new(Synchronization, SynReport, 0);
 
     public KeyTransition Transition => (KeyTransition)Value;
 

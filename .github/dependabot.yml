@@ -1,0 +1,47 @@
+version: 2
+
+# Both ecosystems target develop, like any other change, and their commit
+# prefixes are Conventional Commits: the "Conventional commits" check looks for
+# them, and accepts Dependabot's capitalised "Bump" as it comes (Dependabot
+# adds the colon after a prefix ending in a parenthesis).
+
+updates:
+  # NuGet dependencies
+  - package-ecosystem: nuget
+    directory: '/'
+    schedule:
+      interval: weekly
+      day: monday
+    target-branch: develop
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      # Test packages move together and do not affect the shipped product:
+      # grouping them avoids three pull requests for one version bump.
+      tests:
+        patterns:
+          - 'xunit*'
+          - 'Microsoft.NET.Test.Sdk'
+          - 'coverlet.*'
+      # sherpa-onnx and its native runtime must move together, for a more
+      # serious reason: mismatched versions make loading the native library
+      # fail outright. The pattern covers the linux-x64 runtime package.
+      engine:
+        patterns:
+          - 'org.k2fsa.sherpa.onnx*'
+
+  # GitHub Actions. The Windows sibling's very first CI run flagged the Node.js
+  # 20 deprecation; tracking them avoids rediscovering that kind of thing in
+  # the logs.
+  - package-ecosystem: github-actions
+    directory: '/'
+    schedule:
+      interval: monthly
+    target-branch: develop
+    labels:
+      - dependencies
+    commit-message:
+      prefix: 'ci(deps)'

@@ -1,0 +1,139 @@
+HexLinux
+Copyright 2026 Djamel OUAZAR
+
+This product is distributed under the Apache 2.0 licence (see the LICENSE file).
+
+
+================================================================================
+THIRD-PARTY COMPONENTS
+================================================================================
+
+HexLinux redistributes none of these components in its repository: they are
+fetched at build time (NuGet packages) or by scripts/get-model.sh (the
+recognition model). The published executable embeds the .NET runtime, the
+libraries marked below as embedded, and nothing else. They remain governed by
+their own licences, restated here.
+
+
+--------------------------------------------------------------------------------
+Parakeet TDT 0.6B v3
+--------------------------------------------------------------------------------
+Author   : NVIDIA Corporation
+Licence  : Creative Commons Attribution 4.0 International (CC-BY-4.0)
+Source   : https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3
+ONNX export used : https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+
+CC-BY-4.0 requires that the author be credited. This notice does so. It permits
+commercial and non-commercial use, as well as redistribution of the model and
+works derived from it. The model is downloaded by scripts/get-model.sh, not
+shipped with HexLinux.
+
+
+--------------------------------------------------------------------------------
+sherpa-onnx
+--------------------------------------------------------------------------------
+Author   : Next-gen Kaldi (k2-fsa)
+Licence  : Apache License 2.0
+Source   : https://github.com/k2-fsa/sherpa-onnx
+Packages : org.k2fsa.sherpa.onnx, org.k2fsa.sherpa.onnx.runtime.linux-x64
+
+Runs the Parakeet model. Embedded in the published executable: the managed
+library and the native one (libsherpa-onnx-c-api.so).
+
+
+--------------------------------------------------------------------------------
+ONNX Runtime
+--------------------------------------------------------------------------------
+Author   : Microsoft Corporation
+Licence  : MIT
+Source   : https://github.com/microsoft/onnxruntime
+
+The inference engine used by sherpa-onnx. Its native library
+(libonnxruntime.so) comes inside the sherpa-onnx runtime package and is
+embedded in the published executable.
+
+
+--------------------------------------------------------------------------------
+Tmds.DBus.Protocol
+--------------------------------------------------------------------------------
+Author   : Tom Deseyn
+Licence  : MIT
+Source   : https://github.com/tmds/Tmds.DBus
+
+D-Bus client and server, for the tray icon, its menu and the notifications.
+Embedded in the published executable.
+
+
+--------------------------------------------------------------------------------
+.NET
+--------------------------------------------------------------------------------
+Author   : Microsoft Corporation and the .NET Foundation
+Licence  : MIT
+Source   : https://github.com/dotnet/runtime
+
+The runtime platform, bundled inside the published self-contained executable,
+with the libraries Microsoft publishes for it that the packages above depend on.
+
+
+--------------------------------------------------------------------------------
+Test tooling
+--------------------------------------------------------------------------------
+xUnit.net (xunit, xunit.runner.visualstudio)
+  Author : .NET Foundation and contributors
+  Licence: Apache License 2.0
+  Source : https://github.com/xunit/xunit
+
+Microsoft.NET.Test.Sdk
+  Author : Microsoft Corporation
+  Licence: MIT
+  Source : https://github.com/microsoft/vstest
+
+coverlet (coverlet.msbuild)
+  Author : coverlet contributors
+  Licence: MIT
+  Source : https://github.com/coverlet-coverage/coverlet
+
+Used for tests only: these components are not distributed with the
+application.
+
+
+================================================================================
+USED AT RUN TIME, NOT DISTRIBUTED
+================================================================================
+
+HexLinux relies on parts of the system it runs on. None of them is shipped
+with HexLinux: each comes from the distribution, under its own licence (as
+stated in the distribution's copyright file, Ubuntu 24.04 here).
+
+libpulse (PulseAudio client library)
+  Licence: LGPL-2.1-or-later
+  Loaded at run time, from the system, through libpulse-simple.so.0 and
+  libpulse.so.0: the microphone and the tones. PipeWire serves the same
+  interface through pipewire-pulse.
+
+Programs HexLinux runs as separate processes, when they are installed:
+  wl-clipboard (wl-copy, wl-paste)  GPL-3.0-or-later   clipboard, Wayland
+  xclip                             GPL-2.0-or-later   clipboard, X11
+  xsel                              X11 licence        clipboard, X11
+  xdotool                           BSD-3-Clause       keystrokes, X11
+  wtype                             MIT (Expat)        keystrokes, wlroots Wayland
+  loginctl (systemd)                LGPL-2.1-or-later  session state
+  localectl (systemd)               LGPL-2.1-or-later  keyboard layout, --doctor
+  gsettings (GLib)                  LGPL-2.1-or-later  keyboard layout under
+                                                       GNOME, --doctor
+  xdg-open (xdg-utils)              MIT (Expat)        opening the settings file
+                                                       and the log folder
+  notify-send (libnotify)           LGPL-2.1-or-later  notifications, when the
+                                                       session bus cannot be
+                                                       reached directly
+
+
+================================================================================
+INSPIRATION
+================================================================================
+
+HexLinux is the Linux sibling of HexWin (https://github.com/legb78/hex_windows),
+by the same author, and follows its design, rules and diagnostics. Both take
+their interaction model from Hex (https://github.com/kitlangton/Hex), a
+dictation app for macOS, along with its choice of engine — Parakeet rather
+than Whisper. No code is taken from Hex: it is written in Swift.
