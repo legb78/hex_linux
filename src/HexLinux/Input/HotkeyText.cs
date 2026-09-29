@@ -97,6 +97,10 @@ public static class HotkeyText
                     "Right Alt is AltGr on many layouts (French, German…): characters such as @ or € are typed with it, and each one cancels the dictation.",
                 "SUPER" or "LEFTSUPER" or "RIGHTSUPER" =>
                     $"{label} still reaches the desktop: released alone, it opens the overview or the application menu on most desktops.",
+                _ when IsCommonFunctionKey(key) =>
+                    $"{label} still reaches the focused application, which may act on it at every press and repeat while it is held "
+                    + "(F1 often opens the help, F5 reloads a web page, F11 switches to full screen). On many laptops the top row "
+                    + "sends media keys unless Fn is held: check with hexlinux --watch-hotkey.",
                 _ => null,
             };
 
@@ -115,4 +119,14 @@ public static class HotkeyText
 
         return caveats;
     }
+
+    /// <summary>
+    /// F1 to F12, the row every keyboard carries and applications bind; F13
+    /// to F24 exist on few keyboards, which is what makes them free.
+    /// </summary>
+    private static bool IsCommonFunctionKey(string key) =>
+        key.Length is 2 or 3
+        && (key[0] is 'F' or 'f')
+        && int.TryParse(key.AsSpan(1), out int number)
+        && number is >= 1 and <= 12;
 }

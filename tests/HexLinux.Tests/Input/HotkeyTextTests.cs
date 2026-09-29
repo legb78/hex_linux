@@ -64,10 +64,38 @@ public class HotkeyTextTests
     [Theory]
     [InlineData("F13")]
     [InlineData("F24")]
+    [InlineData("Pause")]
     public void A_function_key_beyond_F12_costs_nothing(string key)
     {
-        // The macro pad bought precisely to dictate with F13.
+        // The macro pad bought precisely to dictate with F13; Pause, which
+        // almost no application binds.
         Assert.Empty(HotkeyText.Caveats([key], segmentation: true));
+    }
+
+    [Theory]
+    [InlineData("F1")]
+    [InlineData("F5")]
+    [InlineData("F10")]
+    [InlineData("F12")]
+    [InlineData("f5")]
+    public void A_function_key_of_the_top_row_says_the_application_still_gets_it(string key)
+    {
+        // Accepted since F1 to F12 type nothing, but not free: held in a
+        // browser, F5 reloads the page at every repeat. And on many laptops
+        // that row sends media keys unless Fn is held.
+        string caveat = Assert.Single(HotkeyText.Caveats([key], segmentation: false));
+
+        Assert.StartsWith($"{key} still reaches the focused application", caveat, StringComparison.Ordinal);
+        Assert.Contains("--watch-hotkey", caveat, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("F0")]
+    [InlineData("F123")]
+    [InlineData("Fx")]
+    public void Only_F1_to_F12_get_the_top_row_caveat(string key)
+    {
+        Assert.Empty(HotkeyText.Caveats([key], segmentation: false));
     }
 
     [Theory]
