@@ -42,9 +42,9 @@ public static class UinputAbi
     /// <para>1 to 31 is what udev requires to class a device as a keyboard
     /// (every one of them must be present), and a device libinput does not
     /// take for a keyboard is ignored by the compositor. Left Shift, V and
-    /// Insert complete the three paste shortcuts; Left Ctrl is already in the
-    /// range. Nothing else: a mistake in a key sequence can then never press
-    /// Power or Sleep.</para>
+    /// Insert complete the three paste shortcuts; Left Ctrl and Backspace
+    /// (14, the spoken "efface ça") are already in the range. Nothing else: a
+    /// mistake in a key sequence can then never press Power or Sleep.</para>
     /// </summary>
     public static IReadOnlyList<int> DeclaredKeys { get; } =
         [.. Enumerable.Range(1, 31), LinuxKeys.LeftShift, LinuxKeys.V, LinuxKeys.Insert];

@@ -170,6 +170,52 @@ public sealed class TextInjector
         return await PasteAsync(text, plan, shortcut, tools, clipboard, refusal).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Deletes the last <paramref name="characters"/> characters before the
+    /// caret, one Backspace each: what the dictation itself just inserted,
+    /// when the user says "efface ça". Sent by whatever sends the keys of
+    /// <paramref name="plan"/> — the virtual keyboard, xdotool or wtype, which
+    /// can all press Backspace. Returns false when nothing could send them.
+    ///
+    /// <para>HexWin releases Ctrl first, since with it each Backspace would
+    /// take a whole word. The virtual keyboard cannot release a key held on
+    /// the real one (see the class notes), so the daemon waits instead, before
+    /// calling this, for every modifier to be let go.</para>
+    /// </summary>
+    public async Task<bool> EraseAsync(int characters, InjectionPlan plan, IReadOnlyDictionary<string, string> tools)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(tools);
+
+        if (characters <= 0)
+        {
+            return true;
+        }
+
+        if (!plan.IsPossible)
+        {
+            return false;
+        }
+
+        if (plan.Keys == KeyStroker.Uinput)
+        {
+            bool sent = await Task.Run(() => _uinput?.Send(KeySequences.Erase(characters)) == true).ConfigureAwait(false);
+
+            if (!sent)
+            {
+                _log("the virtual keyboard did not take the Backspaces");
+            }
+
+            return sent;
+        }
+
+        // xdotool waits 12 ms between keystrokes by default.
+        TimeSpan timeout = KeysTimeout + TimeSpan.FromMilliseconds(20.0 * characters);
+        ToolCommand command = ToolCommands.EraseKeys(plan.Keys, characters);
+
+        return await Task.Run(() => RunTool(command, ReadOnlyMemory<byte>.Empty, timeout, tools)).ConfigureAwait(false);
+    }
+
     private async Task<InsertionResult> PasteAsync(
         string text,
         InjectionPlan plan,

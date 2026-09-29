@@ -110,6 +110,27 @@ public static class ToolCommands
         _ => throw new ArgumentOutOfRangeException(nameof(keys), keys, "Only xdotool and wtype take a command line."),
     };
 
+    /// <summary>
+    /// Presses Backspace <paramref name="characters"/> times, for a spoken
+    /// "efface ça". The count is all the arguments reveal: the text erased
+    /// never appears. xdotool keeps <c>--clearmodifiers</c>, as for the paste
+    /// (Ctrl+Backspace would erase words); wtype, which has no repeat option,
+    /// gets one <c>-k BackSpace</c> per character — BackSpace being the X
+    /// keysym name, which both tools take.
+    /// </summary>
+    public static ToolCommand EraseKeys(KeyStroker keys, int characters)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(characters);
+
+        return keys switch
+        {
+            KeyStroker.Xdotool => new(ToolLocator.Xdotool,
+                ["key", "--clearmodifiers", "--repeat", characters.ToString(CultureInfo.InvariantCulture), "BackSpace"]),
+            KeyStroker.Wtype => new(ToolLocator.Wtype, [.. Enumerable.Repeat<string[]>(["-k", "BackSpace"], characters).SelectMany(pair => pair)]),
+            _ => throw new ArgumentOutOfRangeException(nameof(keys), keys, "Only xdotool and wtype take a command line."),
+        };
+    }
+
     /// <summary>Types what arrives on standard input.</summary>
     public static ToolCommand TypeText(KeyStroker keys) => keys switch
     {
