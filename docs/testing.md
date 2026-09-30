@@ -292,6 +292,42 @@ files in memory, so the model (about 490 MB to download, 670 MB extracted)
 needs a machine with memory to spare, or a second stick. Autostart, the lock
 screen and user switching are better tested on an installed system.
 
+## First results on a real Ubuntu desktop
+
+2026-09-30, HexLinux 0.1.0 (the release archive built from `develop` at
+5402527), Ubuntu 24.04.5 LTS from the official cloud image with GNOME 46
+(`ubuntu-desktop-minimal`), kernel 6.8.0-142-generic, in a VirtualBox 7.2.4
+machine (4 processors, 8 GB) on a Windows 11 host with Hyper-V active, driven
+over SSH. The keyboard was a test keyboard created through `/dev/uinput` —
+the kernel's own evdev path, hot-plugged like a USB keyboard — and the
+microphone a PipeWire null sink playing the test recording, made the default
+source.
+
+| Check | GNOME Wayland | GNOME Xorg |
+|-------|---------------|------------|
+| `--doctor` before the udev rule: keyboards unreadable, paste impossible, exit 3 | ✅ | — |
+| `--watch-hotkey` before the rule: "permission denied", exit 5 | ✅ | — |
+| `install-udev-rules.sh --with-uinput`: `getfacl` shows `user:<you>:rw-` on the keyboard and on `/dev/uinput`, with the user in no `input` group | ✅ | — |
+| `--doctor` after the rule: paste through xclip and uinput (Wayland), xclip and xdotool (Xorg), exit 0 | ✅ | ✅ |
+| `--transcribe` of the test recording | ✅ | ✅ |
+| Hold right `Ctrl` on the hot-plugged keyboard, speak, release: the text lands in a native GTK4 window | ✅ | ✅ |
+| The previous clipboard content comes back after the paste | ✅ | ✅ |
+| Type mode, typed by xdotool | impossible, as documented | ✅ |
+| A quick right `Ctrl`+`C`: no tone, no dictation | ✅ | — |
+| Screen locked (`loginctl lock-session`): the hotkey and `--toggle` are refused, nothing inserted, "dictation refused: session … is locked" | ✅ | — |
+| Tray icon shown by the AppIndicator extension; tooltip "HexLinux — ready (Right Ctrl)"; menu entries and their check marks; "Dictate now" then "Finish dictation" dictate | ✅ | ✅ |
+| The icon registers again after the lock screen, and at login once the extension is up | ✅ | ✅ |
+| `--autostart on`: `desktop-file-validate` passes; after a new login the daemon is running; `--autostart off` removes the entry | — | ✅ |
+
+Speed in that virtual machine, for the record only: the model loaded in 7 to
+12 s and the 5 s recording was transcribed in about 2 s, against 0.2 s under
+WSL on the same host. VirtualBox beside Hyper-V is slow; these are not
+figures for native Linux.
+
+Still to be done by a person, at the machine: a real voice into a real
+microphone, a physical press of the hotkey (change VirtualBox's Host key
+first), KDE Plasma and Sway, a user switch, and a clipboard history manager.
+
 ## Manual checklist
 
 Run `./hexlinux --doctor` first in every session, and keep its output with the
@@ -310,10 +346,12 @@ the actual one.
 | Sway, Hyprland (wlroots) | wl-clipboard | uinput if allowed, otherwise wtype | wtype |
 | Xfce, Cinnamon, MATE (X11) | xclip | xdotool | xdotool |
 
-Two of these are still to be confirmed on a real GNOME: that Mutter keeps the
-X11 and Wayland clipboards in step, so that a dictation put in the X11
-clipboard is pasted into native Wayland windows, and that `wl-copy` would
-indeed steal the focus there. Record what you see.
+The GNOME Wayland row is confirmed (see [First results](#first-results-on-a-real-ubuntu-desktop)):
+Mutter keeps the X11 and Wayland clipboards in step, and a dictation put in
+the X11 clipboard by xclip is pasted into a native Wayland window by the
+virtual keyboard's Ctrl+V. That `wl-copy` would steal the focus there is still
+unobserved: HexLinux does not use it on GNOME. Record what you see on other
+desktops.
 
 ### Keyboard (evdev)
 
