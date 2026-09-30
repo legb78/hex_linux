@@ -1,0 +1,177 @@
+{
+  // HexLinux settings. Comments are allowed.
+  // An invalid value is replaced by its default, and only that value: a
+  // typo never costs the other settings, and never stops dictation from
+  // starting. "hexlinux --doctor" lists every value that was set aside.
+  // Changes take effect when HexLinux starts again (the tray's "Play tones"
+  // and "Start at login" switches apply at once).
+
+  // Folder holding the Parakeet model. A relative path is looked for in
+  // ~/.local/share/hexlinux first ($XDG_DATA_HOME/hexlinux), where
+  // scripts/get-model.sh puts it, then next to the executable. "~/" at the
+  // start means your home folder.
+  // A folder and not a file: the model is made of an encoder, a decoder,
+  // a joiner and a vocabulary.
+  "modelPath": "models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+
+  // The dictation language is not a setting: Parakeet v3 works out on its own
+  // which of its 25 European languages is being spoken.
+  //
+  // Spoken edits are not settings either, always on: hesitations (euh, hum,
+  // uh, um…) are dropped, and "efface ça", "supprime la dernière phrase",
+  // "scratch that" or "delete the last sentence", said on its own, erases the
+  // sentence before it. With "segmentation" on, a sentence already inserted
+  // is erased with Backspace — only ever text the same dictation inserted,
+  // and once no Ctrl, Alt, Shift or Super key is held (with Ctrl, Backspace
+  // would erase whole words).
+
+  // Keys to hold in order to dictate.
+  // Accepted values: Ctrl, LeftCtrl, RightCtrl, Alt, LeftAlt, RightAlt,
+  // Shift, LeftShift, RightShift, Super, LeftSuper, RightSuper (Win, LeftWin
+  // and RightWin are read as the Super keys), F1 through F24, Pause.
+  // "hexlinux --watch-hotkey" shows the name of a key as you press it. F1 to
+  // F12 still reach the application (F5 reloads a web page), and many laptops
+  // send media keys from that row unless Fn is held.
+  //
+  // Why Right Ctrl alone by default: on Linux the keys of the shortcut are
+  // not withheld from the desktop, so the shortcut must be a key that does
+  // nothing when pressed on its own, that nobody types text with, and that
+  // leaves a paste unchanged while it is still held (with "segmentation" on,
+  // each sentence is pasted while you keep holding it). Right Shift, HexWin's
+  // default, fails the last two: it shifts letters to capitals, and turns
+  // Ctrl+V into Ctrl+Shift+V. A lone Super opens the overview when released,
+  // a lone Alt reaches the menu bar: --doctor warns about such choices.
+  //
+  // HexWin accepts any key; HexLinux refuses the keys that type, edit, move
+  // the cursor, toggle a state or that the desktop acts on — letters, digits,
+  // Space, Enter, the arrows, the numpad, CapsLock, Insert, media keys —
+  // since the desktop still sees them: held as a shortcut, Space would type
+  // spaces and CapsLock would toggle capitals. Fn emits no code the system
+  // can see. A shortcut naming a refused or unknown key falls back to the
+  // default, and --doctor says why.
+  "hotkey": ["RightCtrl"],
+
+  // Below this, the press is treated as accidental and ignored. It is also
+  // how long the shortcut must be held before a dictation really starts: a
+  // Right Ctrl let go sooner, or combined with another key (Right Ctrl+C is
+  // still a copy), stays an ordinary shortcut, with no tone. The microphone
+  // opens at the press, so nothing said in the first instant is lost.
+  "minRecordingMilliseconds": 250,
+
+  // Stops recording if the key stays held down.
+  "maxRecordingSeconds": 120,
+
+  // Sentence by sentence. With true, a pause in your speech closes a piece of
+  // the dictation, which is transcribed and inserted while you keep talking:
+  // on a long dictation the text lands sentence by sentence instead of all at
+  // once at the end. With false, everything arrives at release.
+  "segmentation": false,
+
+  // The pause that closes a piece, when "segmentation" is true. Kept while it
+  // is false, so turning it back on finds the same duration.
+  //
+  // The pause is found by Silero VAD, a small voice detector that tells
+  // speech from a fan or a street, when scripts/get-model.sh has put
+  // silero_vad.onnx next to the model. Without that file it is found on the
+  // sound level, with the threshold that tells a muted microphone from a
+  // quiet room: in a noisy place no pause is ever seen, and the text simply
+  // arrives at release.
+  //
+  // A sentence cut in two by a pause is stitched back: "Je voudrais parler"
+  // then "avec le client" gives one sentence, not two.
+  "pauseMilliseconds": 700,
+
+  // Minutes without dictating after which the model is freed from memory.
+  // Set 0 to keep it resident indefinitely (it is then loaded at startup).
+  //
+  // The model takes about 1 GB once loaded. Freeing it returns that memory to
+  // the system; the next dictation pays a reload of a few seconds — but the
+  // reload starts the moment the dictation starts, so it runs while you are
+  // still speaking.
+  "unloadAfterMinutes": 5,
+
+  // Compute provider. "cpu" is the only one available, and that is not a
+  // choice: the sherpa-onnx native libraries published on NuGet are built for
+  // the CPU only. HexWin found that GPU providers were accepted and then
+  // silently fell back to the CPU; offering them would promise an
+  // acceleration that cannot happen.
+  "provider": "cpu",
+
+  // Threads allocated to decoding. 0 picks one per physical core, up to 8:
+  // past a handful the gain collapses, the model being small. Any other
+  // number, 1 to 32, is used as it is.
+  "threads": 0,
+
+  // The space French typography puts before ? ! ; : and ». Parakeet writes
+  // "vendredi?" the English way; true turns it into "vendredi ?", as HexWin
+  // does, in text that reads as French only — judged by its small words and
+  // accents, since the engine does not say which language it heard — so
+  // "Are you ready?" stays as it is. A sentence with no clue either way
+  // ("Vendredi?") counts as French. false never adds the space.
+  "frenchSpacing": true,
+
+  // "Paste" : clipboard, then the paste shortcut. Instant, and the default.
+  //           Your clipboard is saved before and put back 0.4 s after (or
+  //           emptied when it could not be saved), but for that moment the
+  //           dictation is in the clipboard, where a clipboard history
+  //           (KDE's Klipper, a GNOME extension) may keep it.
+  // "Type"  : simulated typing, for applications that ignore pasting, and
+  //           for text that must not go through the clipboard. Needs xdotool
+  //           under X11, or wtype on a wlroots compositor (Sway, Hyprland…);
+  //           GNOME and KDE under Wayland accept no simulated typing.
+  "insertion": "Paste",
+
+  // The keystroke that pastes, in "Paste" mode.
+  // "CtrlV"       : what nearly every graphical application understands.
+  // "CtrlShiftV"  : what terminals understand, where Ctrl+V means something
+  //                 else.
+  // "ShiftInsert" : understood by most toolkits and terminals, and the one
+  //                 choice independent of the keyboard layout. But xterm and
+  //                 similar terminals paste the PRIMARY selection with it —
+  //                 your last mouse selection — not the clipboard.
+  "pasteShortcut": "CtrlV",
+
+  // What sends the keystrokes.
+  // "Auto"    : under X11, xdotool (it works on any keyboard layout), else
+  //             HexLinux's virtual keyboard; under Wayland, the virtual
+  //             keyboard, else wtype where the compositor accepts it.
+  // "Uinput"  : HexLinux's virtual keyboard, made through /dev/uinput. Works
+  //             under every desktop, X11 and Wayland, but needs the optional
+  //             udev rule (scripts/install-udev-rules.sh --with-uinput),
+  //             pastes only (it cannot type text), and presses physical keys:
+  //             on a layout where the V key is elsewhere (Dvorak, Bépo…) its
+  //             Ctrl+V presses another letter — use "ShiftInsert" there.
+  // "Xdotool" : xdotool, X11 windows only (XWayland windows included).
+  // "Wtype"   : wtype, wlroots compositors only.
+  // ydotool is not supported: the built-in virtual keyboard does its job.
+  "keySender": "Auto",
+
+  // When nothing can send keystrokes — GNOME under Wayland without the udev
+  // rule, typically — true leaves the dictation in the clipboard and shows
+  // "Text copied — press Ctrl+V to paste". It is off by default on purpose:
+  // the text then stays in the clipboard, where any application can read it
+  // and a clipboard history may keep it long after — which HexWin never
+  // allows. With false, nothing is inserted and a notification says what to
+  // install.
+  "clipboardFallback": false,
+
+  // What tells you that the recording started and stopped.
+  // "Sound" : a short tone when the dictation starts, a lower one when it
+  //           stops.
+  // "None"  : nothing.
+  // HexWin's on-screen circle does not exist on Linux: a Wayland window
+  // cannot place itself on screen. A HexWin file saying "Both" is read as
+  // "Sound", and "Visual" as "None".
+  //
+  // On speakers rather than headphones, the start tone is picked up by the
+  // microphone. The engine emits nothing for a pure tone, and the level
+  // measurement skips the opening of the recording, so a muted microphone
+  // still reads as silent.
+  "feedback": "Sound",
+
+  // Logs each dictation: duration, captured level, characters produced —
+  // never the text. Those three numbers tell you whether the microphone
+  // heard you, whether the engine understood you, and whether the text made
+  // it out. The log is ~/.local/state/hexlinux/hexlinux.log.
+  "logEnabled": true
+}

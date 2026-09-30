@@ -78,6 +78,15 @@ public sealed class ChordDetector
     /// <summary>True between the moment the shortcut completes and its release.</summary>
     public bool IsActive { get; private set; }
 
+    /// <summary>
+    /// True while any key of the shortcut is still held — after a two-key
+    /// shortcut has been half released, for instance. Kept from HexWin, where
+    /// an insertion waited on it; here the daemon waits on the modifiers held
+    /// on every keyboard instead (<see cref="HotkeyTracker.HeldModifiers"/>,
+    /// <c>ModifierGuard</c>), which covers keys outside the shortcut too.
+    /// </summary>
+    public bool IsAnyHeld => !NothingHeld();
+
     /// <summary>Every code that can take part in the shortcut.</summary>
     public IReadOnlySet<int> Codes => _requirements.SelectMany(codes => codes).ToHashSet();
 
@@ -94,9 +103,7 @@ public sealed class ChordDetector
             return ChordAction.None;
         }
 
-        int slot = FindFreeSlot(code);
-
-        if (slot < 0)
+        if (!TryPlace(code))
         {
             // Key foreign to the shortcut. During a dictation it interrupts:
             // RightCtrl held and then C pressed is a copy, and the user was
@@ -109,8 +116,6 @@ public sealed class ChordDetector
 
             return ChordAction.None;
         }
-
-        _satisfiedBy[slot] = code;
 
         // Complete again while _started still holds: the shortcut was only
         // half released. Nothing starts rather than opening a dictation over
@@ -175,20 +180,99 @@ public sealed class ChordDetector
         return wasActive ? ChordAction.Cancel : ChordAction.None;
     }
 
-    private bool IsAlreadySatisfying(int code) => Array.IndexOf(_satisfiedBy, code) >= 0;
-
-    private int FindFreeSlot(int code)
+    /// <summary>
+    /// Forgets some keys without their release ever arriving: the ones held
+    /// on a keyboard that has just disappeared, or whose events the kernel
+    /// dropped.
+    ///
+    /// <para>Narrower than <see cref="Reset"/> on purpose. A Bluetooth
+    /// keyboard falling asleep must not cancel a dictation held on the laptop's
+    /// own keyboard; only when a forgotten key was part of the shortcut in
+    /// progress is the dictation given up — nobody can tell whether it was
+    /// released on purpose.</para>
+    /// </summary>
+    public ChordAction Forget(IEnumerable<int> codes)
     {
-        for (int i = 0; i < _requirements.Length; i++)
+        ArgumentNullException.ThrowIfNull(codes);
+
+        bool forgotAny = false;
+
+        foreach (int code in codes)
         {
-            if (_satisfiedBy[i] == 0 && Array.IndexOf(_requirements[i], code) >= 0)
+            int slot = FindSatisfiedSlot(code);
+
+            if (slot >= 0)
             {
-                return i;
+                _satisfiedBy[slot] = 0;
+                forgotAny = true;
             }
         }
 
-        return -1;
+        if (NothingHeld())
+        {
+            _started = false;
+        }
+
+        if (!forgotAny || !IsActive)
+        {
+            return ChordAction.None;
+        }
+
+        IsActive = false;
+        return ChordAction.Cancel;
     }
+
+    private bool IsAlreadySatisfying(int code) => Array.IndexOf(_satisfiedBy, code) >= 0;
+
+    /// <summary>
+    /// Gives <paramref name="code"/> a slot: a free one that accepts it, or
+    /// else one freed by moving its key to another slot that accepts that
+    /// key too.
+    ///
+    /// <para>Taking the first free slot is not enough when names overlap:
+    /// with <c>["Ctrl", "RightCtrl"]</c>, Right Ctrl pressed first took the
+    /// "Ctrl" slot, and Left Ctrl then fitted nowhere — the shortcut only
+    /// worked with Left Ctrl first (QA-07). A shortcut holds a handful of
+    /// keys, so the search is trivially small.</para>
+    /// </summary>
+    private bool TryPlace(int code)
+    {
+        for (int i = 0; i < _requirements.Length; i++)
+        {
+            if (_satisfiedBy[i] == 0 && Accepts(i, code))
+            {
+                _satisfiedBy[i] = code;
+                return true;
+            }
+        }
+
+        return TryPlaceMoving(code, new bool[_requirements.Length]);
+    }
+
+    /// <summary>An augmenting path, as in bipartite matching: each slot visited once.</summary>
+    private bool TryPlaceMoving(int code, bool[] visited)
+    {
+        for (int i = 0; i < _requirements.Length; i++)
+        {
+            if (visited[i] || !Accepts(i, code))
+            {
+                continue;
+            }
+
+            visited[i] = true;
+            int occupant = _satisfiedBy[i];
+
+            if (occupant == 0 || TryPlaceMoving(occupant, visited))
+            {
+                _satisfiedBy[i] = code;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool Accepts(int slot, int code) => Array.IndexOf(_requirements[slot], code) >= 0;
 
     private int FindSatisfiedSlot(int code) => Array.IndexOf(_satisfiedBy, code);
 
